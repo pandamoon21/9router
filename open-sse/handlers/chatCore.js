@@ -38,7 +38,7 @@ import { resolveSessionId } from "../utils/sessionManager.js";
  * @param {object} options.credentials - Provider credentials
  * @param {string} options.sourceFormatOverride - Override detected source format (e.g. "openai-responses")
  */
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, clientSignal }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   // Stable per-session color so all lines of one CLI conversation share a tag
@@ -253,8 +253,39 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       if (onDisconnect) onDisconnect(reason);
     },
     onError: () => trackPendingRequest(model, provider, connectionId, false),
+    onComplete: () => trackPendingRequest(model, provider, connectionId, false),
     log, provider, model, reqTag
   });
+
+  // Link client signal abort to streamController abort
+  if (clientSignal) {
+    if (clientSignal.aborted) {
+      streamController.handleDisconnect("client_aborted");
+      streamController.abort();
+    } else {
+      const abortHandler = () => {
+        streamController.handleDisconnect("client_aborted");
+        streamController.abort();
+      };
+      clientSignal.addEventListener("abort", abortHandler);
+      // Clean up event listener when stream is done/disconnected/error
+      const origDisconnect = streamController.handleDisconnect;
+      streamController.handleDisconnect = (reason) => {
+        clientSignal.removeEventListener("abort", abortHandler);
+        origDisconnect(reason);
+      };
+      const origComplete = streamController.handleComplete;
+      streamController.handleComplete = () => {
+        clientSignal.removeEventListener("abort", abortHandler);
+        origComplete();
+      };
+      const origError = streamController.handleError;
+      streamController.handleError = (error) => {
+        clientSignal.removeEventListener("abort", abortHandler);
+        origError(error);
+      };
+    }
+  }
 
   const proxyOptions = {
     connectionProxyEnabled: credentials?.providerSpecificData?.connectionProxyEnabled === true,
