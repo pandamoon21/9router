@@ -26,12 +26,14 @@ export default {
     // CodeBuddy intl speaks the same unified OpenAI reasoning_effort shape as CN.
     thinkingFormat: "openai",
     headers: {
-      "User-Agent": "IDE/2.108.1 CodeBuddy/2.108.1",
+      "User-Agent": "IDE/2.133.1 CodeBuddy/2.133.1",
       "X-Product": "SaaS",
       "X-IDE-Type": "IDE",
       "X-IDE-Name": "IDE",
       "x-requested-with": "XMLHttpRequest",
       "x-codebuddy-request": "1",
+    "X-Domain": "www.codebuddy.ai",
+    "X-IDE-Version": "2.133.1",
     },
     auth: {
       combined: true,
@@ -66,7 +68,7 @@ export default {
     stateUrl: "https://www.codebuddy.ai/v2/plugin/auth/state",
     tokenUrl: "https://www.codebuddy.ai/v2/plugin/auth/token",
     refreshUrl: "https://www.codebuddy.ai/v2/plugin/auth/token/refresh",
-    userAgent: "IDE/2.63.2 CodeBuddy/2.63.2",
+    userAgent: "IDE/2.133.1 CodeBuddy/2.133.1",
     platform: "ide",
     pollInterval: 5000,
   },

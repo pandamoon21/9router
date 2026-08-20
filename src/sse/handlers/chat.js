@@ -23,6 +23,7 @@ import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
+import { ensureCodebuddyStartupTelemetry, sendCodebuddyPreChat, sendCodebuddyPostChat, getCodebuddyIdentity } from "open-sse/services/codebuddy/index.js";
 
 /**
  * Handle chat completion request
@@ -257,6 +258,28 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
     }
 
+
+    // CodeBuddy (Tencent) device-fingerprint & lifecycle telemetry.
+    // Fire-and-forget — never blocks or fails the chat request.
+    // Mirrors the official CLI's /v2/report events so the server does not
+    // flag the key as a "silent key" (chat with zero telemetry → ban).
+    let _cbTelemetryCtx = null;
+    if (provider === "codebuddy-cn" || provider === "codebuddy-intl") {
+      try {
+        const _cbToken = refreshedCredentials.accessToken || refreshedCredentials.apiKey;
+        const _cbIdentity = getCodebuddyIdentity(_cbToken);
+        const _cbConversationId = _cbIdentity.sessionId;
+        const _cbRequestId = `${_cbIdentity.sessionId.slice(0, 8)}-${Date.now().toString(36)}`;
+        const _cbMessageId = `${_cbIdentity.machineId.slice(0, 8)}-${Math.random().toString(36).slice(2, 10)}`;
+        _cbTelemetryCtx = { conversationId: _cbConversationId, requestId: _cbRequestId, messageId: _cbMessageId, requestStartTime: Date.now() };
+        // 1. Startup lifecycle (once per credential per process)
+        ensureCodebuddyStartupTelemetry(provider, _cbToken, log).catch(() => {});
+        // 2. Pre-chat events: agent_task_created, chat_message_send, chat_request_send
+        const _cbInputLength = JSON.stringify(body?.messages || body || {}).length;
+        sendCodebuddyPreChat({ provider, accessToken: _cbToken, conversationId: _cbConversationId, requestId: _cbRequestId, messageId: _cbMessageId, inputLength: _cbInputLength, model, log }).catch(() => {});
+      } catch (e) { log?.warn?.("CB_TELEMETRY", `pre-chat hook failed: ${e.message}`); }
+    }
+
     // Use shared chatCore
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
@@ -299,6 +322,23 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         await clearAccountError(credentials.connectionId, credentials, model);
       }
     });
+
+    // 3. Post-chat telemetry: chat_message_response, agent_task_completed
+    if (_cbTelemetryCtx) {
+      const _cbToken = refreshedCredentials.accessToken || refreshedCredentials.apiKey;
+      sendCodebuddyPostChat({
+        provider, accessToken: _cbToken,
+        conversationId: _cbTelemetryCtx.conversationId,
+        requestId: _cbTelemetryCtx.requestId,
+        messageId: _cbTelemetryCtx.messageId,
+        inputToken: result.usage?.prompt_tokens || result.usage?.inputTokens || 0,
+        outputToken: result.usage?.completion_tokens || result.usage?.outputTokens || 0,
+        durationMs: Date.now() - (_cbTelemetryCtx.requestStartTime || Date.now()),
+        isSuccessful: result.success,
+        finishReason: result.usage?.finish_reason || "stop",
+        log,
+      }).catch(() => {});
+    }
 
     if (result.success) return result.response;
 

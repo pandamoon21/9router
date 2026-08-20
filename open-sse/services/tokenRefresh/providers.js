@@ -3,6 +3,7 @@ import { OAUTH_ENDPOINTS, GITHUB_COPILOT, buildKimiHeaders } from "../../config/
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
 import { dedupRefresh } from "./dedup.js";
 import { buildExternalIdpRefreshParams } from "../../../src/lib/oauth/kiroExternalIdp.js";
+import { extractCodebuddyUid } from "../codebuddy/index.js";
 
 let _xaiServiceSingleton = null;
 export async function refreshXaiToken(refreshToken, log) {
@@ -512,8 +513,13 @@ export async function refreshCopilotToken(githubAccessToken, log) {
 // CodeBuddy (Tencent) refresh — POST /v2/plugin/auth/token/refresh with the
 // refresh token carried in the X-Refresh-Token header (not a form body),
 // matching the official CodeBuddy CLI. Response: { code: 0, data: <token> }.
-export async function refreshCodebuddyToken(refreshToken, log) {
-  if (!refreshToken) return null;
+export async function refreshCodebuddyToken(credentials, log) {
+  const refreshToken = typeof credentials === "string" ? credentials : credentials?.refreshToken;
+  const oldAccessToken = typeof credentials === "object" && credentials ? credentials.accessToken : null;
+  let uid = null;
+  if (oldAccessToken) {
+    try { uid = extractCodebuddyUid(oldAccessToken); } catch {}
+  }
   return dedupRefresh("codebuddy-cn", refreshToken, async () => {
     const oauth = PROVIDER_OAUTH["codebuddy-cn"] || {};
     const response = await fetch(oauth.refreshUrl, {
@@ -527,6 +533,8 @@ export async function refreshCodebuddyToken(refreshToken, log) {
         "X-Refresh-Token": refreshToken,
         "X-Auth-Refresh-Source": "plugin",
         "X-Product": "SaaS",
+        ...(oldAccessToken ? { Authorization: `Bearer ${oldAccessToken}` } : {}),
+        ...(uid ? { "X-User-Id": uid } : {}),
       },
       body: "{}",
     });
@@ -563,8 +571,13 @@ export async function refreshCodebuddyToken(refreshToken, log) {
   }, log);
 }
 
-export async function refreshCodebuddyIntlToken(refreshToken, log) {
-  if (!refreshToken) return null;
+export async function refreshCodebuddyIntlToken(credentials, log) {
+  const refreshToken = typeof credentials === "string" ? credentials : credentials?.refreshToken;
+  const oldAccessToken = typeof credentials === "object" && credentials ? credentials.accessToken : null;
+  let uid = null;
+  if (oldAccessToken) {
+    try { uid = extractCodebuddyUid(oldAccessToken); } catch {}
+  }
   return dedupRefresh("codebuddy-intl", refreshToken, async () => {
     const oauth = PROVIDER_OAUTH["codebuddy-intl"] || {};
     const response = await fetch(oauth.refreshUrl, {
@@ -578,6 +591,8 @@ export async function refreshCodebuddyIntlToken(refreshToken, log) {
         "X-Refresh-Token": refreshToken,
         "X-Auth-Refresh-Source": "plugin",
         "X-Product": "SaaS",
+        ...(oldAccessToken ? { Authorization: `Bearer ${oldAccessToken}` } : {}),
+        ...(uid ? { "X-User-Id": uid } : {}),
       },
       body: "{}",
     });
