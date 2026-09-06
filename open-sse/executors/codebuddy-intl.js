@@ -1,4 +1,5 @@
 import { DefaultExecutor } from "./default.js";
+import { enforceResponseFormat } from "../utils/enforceResponseFormat.js";
 
 /**
  * CodeBuddyIntlExecutor — talks to https://www.codebuddy.ai/v2/chat/completions
@@ -14,8 +15,9 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
   }
 
   transformRequest(model, body, stream, credentials) {
-    const transformed = super.transformRequest(model, body, stream, credentials);
+    let transformed = super.transformRequest(model, body, stream, credentials);
     transformed.stream = true;
+    transformed = enforceResponseFormat(transformed) || transformed;
 
     const eff = transformed.reasoning_effort;
     if (eff === "none" || eff === "off") {

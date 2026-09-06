@@ -1,4 +1,5 @@
 import { DefaultExecutor } from "./default.js";
+import { enforceResponseFormat } from "../utils/enforceResponseFormat.js";
 
 /**
  * CodeBuddyExecutor — talks to https://copilot.tencent.com/v2/chat/completions
@@ -15,8 +16,9 @@ export class CodeBuddyExecutor extends DefaultExecutor {
   }
 
   transformRequest(model, body, stream, credentials) {
-    const transformed = super.transformRequest(model, body, stream, credentials);
+    let transformed = super.transformRequest(model, body, stream, credentials);
     transformed.stream = true;
+    transformed = enforceResponseFormat(transformed) || transformed;
 
     // Tencent's content filter flags CLI agent system prompts ("You are Claude
     // Code, Anthropic's official CLI...") as prompt injection / sensitive content
