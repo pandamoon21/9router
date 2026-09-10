@@ -101,3 +101,7 @@ graphify-out/*
 .start-dev.ps1
 start-dev-silent.cjs
 debug.log
+
+# Upstream dropped this snapshot (2203cd8f) but the test still calls
+# toMatchSnapshot(), so vitest rewrites it on every run — keep it out of git.
+tests/translator/__snapshots__/golden-url-header.test.js.snap

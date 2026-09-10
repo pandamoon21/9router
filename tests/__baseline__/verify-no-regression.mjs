@@ -12,9 +12,16 @@ const resultsPath = process.argv[2];
 if (!resultsPath) { console.error("Missing results.json path"); process.exit(2); }
 
 const r = JSON.parse(readFileSync(resultsPath, "utf8"));
+// vitest reports absolute paths; keep the repo-relative "tests/..." tail so the key
+// matches the "<file> :: <name>" entries in known-fails.txt on any machine.
+const relFile = (p) => {
+  const s = String(p || "").replace(/\\/g, "/");
+  const i = s.lastIndexOf("/tests/");
+  return i >= 0 ? s.slice(i + 1) : s.split("/").slice(-2).join("/");
+};
 const nowFails = r.testResults.flatMap(f =>
   f.assertionResults.filter(a => a.status === "failed")
-    .map(a => f.name.split("/app/")[1] + " :: " + a.fullName)
+    .map(a => relFile(f.name) + " :: " + a.fullName)
 );
 
 // Regression = fail bây giờ NHƯNG không có trong baseline known-fails
