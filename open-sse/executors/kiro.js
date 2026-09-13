@@ -21,12 +21,10 @@ const KIRO_EVENT_TYPES = new Set([
   "reasoningContentEvent",
   "codeEvent",
   "toolUseEvent",
-  "messageStopEvent",
   "metadataEvent",
   "MetadataEvent",
   "contextUsageEvent",
-  "meteringEvent",
-  "metricsEvent"
+  "meteringEvent"
 ]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -660,7 +658,7 @@ export class KiroExecutor extends BaseExecutor {
         ? "upstream_error"
         : safeDiagnostics.terminal_provenance === "integrity_buffer_exceeded"
           ? "terminal_stop"
-        : ["metadata_stop_reason", "message_stop_event"].includes(safeDiagnostics.terminal_provenance)
+        : safeDiagnostics.terminal_provenance === "metadata_stop_reason"
           ? "terminal_stop"
           : "missing_terminal";
       return { kind, message: output.error?.message, diagnostics: safeDiagnostics };
@@ -923,15 +921,11 @@ export class KiroExecutor extends BaseExecutor {
           }
           appendToolInput(tool, value.input);
         }
-      } else if (eventType === "messageStopEvent") {
-        state.explicitStop = true;
-        const reason = normalizeStopReason(
-          event.payload?.stopReason ?? event.payload?.stop_reason
-        ) || (state.sawToolUse ? "tool_use" : "end_turn");
-        const merged = mergeStopReason(state.stopReason, reason);
-        if (merged !== state.stopReason) state.terminalProvenance = "message_stop_event";
-        state.stopReason = merged;
       } else if (eventType === "metadataEvent" || eventType === "MetadataEvent") {
+        // metadataEvent is the turn terminator and carries more than stopReason:
+        // contextUsage (with an invalidation flag), a per-turn meteringUsage
+        // array, turnDurationMs, the applied effort, and a structured refusal.
+        // See docs/08-eventstream-and-tools.md §1.9.
         const metadata = event.payload?.metadataEvent || event.payload?.metadata || event.payload;
         const reason = normalizeStopReason(metadata?.stopReason ?? metadata?.stop_reason);
         if (reason) {
@@ -939,6 +933,50 @@ export class KiroExecutor extends BaseExecutor {
           const merged = mergeStopReason(state.stopReason, reason);
           if (merged !== state.stopReason) state.terminalProvenance = "metadata_stop_reason";
           state.stopReason = merged;
+        }
+
+        if (metadata?.contextUsageInvalidated === true) {
+          state.contextUsagePercentage = null;
+          state.hasContextUsage = false;
+        } else if (Number.isFinite(Number(metadata?.contextUsagePercentage))) {
+          state.contextUsagePercentage = Number(metadata.contextUsagePercentage);
+          state.hasContextUsage = true;
+        }
+
+        if (Number.isFinite(Number(metadata?.turnDurationMs))) {
+          state.turnDurationMs = Number(metadata.turnDurationMs);
+        }
+        if (typeof metadata?.effort === "string") {
+          state.appliedEffort = metadata.effort;
+        }
+
+        // A refusal means the model declined and produced no usable text; the
+        // caller should surface it rather than return an empty completion.
+        const refusal = metadata?.refusal;
+        if (refusal && typeof refusal === "object") {
+          state.refusal = {
+            category: refusal.category ?? null,
+            explanation: refusal.explanation ?? null,
+            recommendedModel: refusal.recommendedModel ?? null,
+          };
+        }
+
+        // Per-turn metering summary (array), distinct from the scalar
+        // meteringEvent.usage handled below.
+        const meteringUsage = metadata?.meteringUsage;
+        if (Array.isArray(meteringUsage) && meteringUsage.length > 0) {
+          state.hasMetering = true;
+          const total = meteringUsage.reduce((sum, entry) => {
+            const value = Number(entry?.usage ?? entry);
+            return sum + (Number.isFinite(value) ? value : 0);
+          }, 0);
+          if (Number.isFinite(total) && total > 0) {
+            state.usage = {
+              ...(state.usage || {}),
+              kiro_credits: total,
+              kiro_credit_unit: "credit",
+            };
+          }
         }
       } else if (eventType === "contextUsageEvent") {
         const percentage = Number(event.payload?.contextUsagePercentage);
@@ -957,23 +995,12 @@ export class KiroExecutor extends BaseExecutor {
             kiro_credit_unit: typeof metering.unit === "string" ? metering.unit : "credit"
           };
         }
-      } else if (eventType === "metricsEvent") {
-        const metrics = event.payload?.metricsEvent || event.payload || {};
-        const prompt = Number(metrics.inputTokens) || 0;
-        const completion = Number(metrics.outputTokens) || 0;
-        if (prompt || completion) {
-          state.usage = {
-            ...(state.usage || {}),
-            prompt_tokens: prompt,
-            completion_tokens: completion,
-            total_tokens: prompt + completion
-          };
-          const cacheRead = Number(metrics.cacheReadInputTokens || metrics.cache_read_input_tokens) || 0;
-          const cacheCreate = Number(metrics.cacheCreationInputTokens || metrics.cache_creation_input_tokens) || 0;
-          if (cacheRead) state.usage.cache_read_input_tokens = cacheRead;
-          if (cacheCreate) state.usage.cache_creation_input_tokens = cacheCreate;
-        }
       }
+      // Any other :event-type is intentionally ignored rather than treated as an
+      // error. The binary declares ~17 variants (citation, follow-up, dry-run,
+      // message-metadata, invalid-state, …) that this provider has no use for;
+      // only 7 have ever been observed on the wire. Failing on an unrecognised
+      // event would turn a usable turn into a hard error.
       return true;
     };
     const processBytes = (chunk, controller) => {
