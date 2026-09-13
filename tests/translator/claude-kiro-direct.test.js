@@ -160,14 +160,20 @@ describe("Claude → Kiro (direct route)", () => {
   );
 
   it.each(["none", "off", "disabled"])(
-    "keeps GPT-5.6 reasoning intentionally disabled for effort %s",
+    "keeps GPT-5.6 reasoning disabled for effort %s",
     (effort) => {
       const out = C2K({
         output_config: { effort },
         messages: [{ role: "user", content: "Do not reason" }],
       }, null, "gpt-5.6-sol");
 
-      expect(out.additionalModelRequestFields).toBeUndefined();
+      // `none` is a real GPT wire level in the captured catalog; `off`/`disabled`
+      // are caller-side aliases with no wire value.
+      if (effort === "none") {
+        expect(out.additionalModelRequestFields).toEqual({ reasoning: { effort: "none" } });
+      } else {
+        expect(out.additionalModelRequestFields).toBeUndefined();
+      }
       expect(out.systemPrompt || "").not.toContain("<thinking_mode>");
       expect(out.systemPrompt || "").not.toContain("<max_thinking_length>");
     }

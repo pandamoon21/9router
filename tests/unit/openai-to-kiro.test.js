@@ -339,7 +339,7 @@ describe("openaiToKiroRequest", () => {
 
     it.each([
       ["xhigh", "gpt-5.6-terra", "xhigh"],
-      ["max", "gpt-5.6-sol", "xhigh"],
+      ["max", "gpt-5.6-sol", "max"],
     ])("preserves GPT-5.6 effort %s as supported wire effort %s", (effort, model, wireEffort) => {
       const body = {
         reasoning: { effort },
@@ -348,6 +348,8 @@ describe("openaiToKiroRequest", () => {
 
       const result = openaiToKiroRequest(model, body, true, {});
 
+      // The captured GPT-5.6 enum is [none, low, medium, high, xhigh, max] —
+      // `max` is its own wire value, not an alias for `xhigh`.
       expect(result.additionalModelRequestFields).toEqual({
         reasoning: { effort: wireEffort },
       });
@@ -384,7 +386,7 @@ describe("openaiToKiroRequest", () => {
     );
 
     it.each(["none", "off", "disabled"])(
-      "keeps GPT-5.6 reasoning intentionally disabled for effort %s",
+      "keeps GPT-5.6 reasoning disabled for effort %s",
       (effort) => {
         const body = {
           reasoning: { effort },
@@ -393,7 +395,15 @@ describe("openaiToKiroRequest", () => {
 
         const result = openaiToKiroRequest("gpt-5.6-luna", body, true, {});
 
-        expect(result.additionalModelRequestFields).toBeUndefined();
+        // kiro-cli's catalog advertises GPT `reasoning.effort: "none"`, so `none`
+        // travels on the wire instead of being dropped. `off`/`disabled` have no
+        // wire value and still fall back to no effort field at all. Either way no
+        // legacy <thinking_mode> tag is injected: both suppress reasoning.
+        if (effort === "none") {
+          expect(result.additionalModelRequestFields).toEqual({ reasoning: { effort: "none" } });
+        } else {
+          expect(result.additionalModelRequestFields).toBeUndefined();
+        }
         expect(systemPromptOf(result)).not.toContain("<thinking_mode>");
         expect(systemPromptOf(result)).not.toContain("<max_thinking_length>");
       }
