@@ -232,17 +232,19 @@ export class KiroExecutor extends BaseExecutor {
     super("kiro", PROVIDERS.kiro);
   }
 
-  buildHeaders(credentials, stream = true, url = "") {
+  // Signature must mirror BaseExecutor's call site: (credentials, stream, url, model).
+  // `model` is accepted for signature parity and is not used here.
+  buildHeaders(credentials, stream = true, url = "", _model = null, attempt = 1) {
+    // Attempt number is threaded through so a retry raises BOTH retry headers,
+    // as the real client does (measured: attempt=2 in each after one retry).
+    // Callers that know the live attempt pass it as the 5th arg; the default of 1
+    // preserves the previous single-shot header for existing call paths.
+    const attemptHeader = `attempt=${attempt}; max=3`;
     const headers = {
       ...this.config.headers,
-      "Amz-Sdk-Request": "attempt=1; max=3",
-      "Amz-Sdk-Invocation-Id": uuidv4()
+      "amz-sdk-request": attemptHeader,
+      "amz-sdk-invocation-id": uuidv4()
     };
-    if (url.includes("://codewhisperer.")) {
-      headers["X-Amz-Target"] = KIRO_CODEWHISPERER_TARGET;
-    } else {
-      delete headers["X-Amz-Target"];
-    }
 
     // API-key auth: the key is stored as accessToken and sent as a bearer token
     // exactly like an OAuth access token, but with an extra `tokentype: API_KEY`
@@ -263,6 +265,35 @@ export class KiroExecutor extends BaseExecutor {
       if (isExternalIdp) {
         headers["TokenType"] = "EXTERNAL_IDP";
       }
+    }
+
+    // OAuth/CLI fingerprint. Verified against a captured kiro-cli 2.21.4 session
+    // (docs/03-chat-request-spec.md). These four headers are what the real client
+    // sends on every inference call, and what this executor previously lacked.
+    //
+    // Deliberately NOT replicated: x-amz-sso-bearer, x-amzn-kiro-agent-mode,
+    // x-amzn-codewhisperer-machine-id, x-amzn-codewhisperer-profile-arn. None of
+    // them appear in captured CLI traffic — the profile ARN travels in the body.
+    // They are kept for the non-OAuth methods that historically needed them, so
+    // this change cannot regress API-key/external_idp connections.
+    const isOAuthCli =
+      authMethod === "builder-id" || authMethod === "idc" ||
+      authMethod === "google" || authMethod === "github" ||
+      authMethod === "import";
+
+    if (isOAuthCli) {
+      headers["x-amz-target"] = KIRO_CODEWHISPERER_TARGET;
+      headers["x-amzn-codewhisperer-optout"] = "false";
+      // No space after the semicolon here — kiro's own AttemptHeaderInterceptor
+      // formats it that way, unlike the smithy `amz-sdk-request` above.
+      headers["x-kiro-attempt"] = `${attempt};max=3`;
+      return headers;
+    }
+
+    if (url.includes("://codewhisperer.")) {
+      headers["X-Amz-Target"] = KIRO_CODEWHISPERER_TARGET;
+    } else {
+      delete headers["X-Amz-Target"];
     }
 
     // CLIRO parity for the Amazon surfaces: the Kiro runtime accepts the
