@@ -273,6 +273,16 @@ function getContentBlocksFromMessage(msg, toolNameMap = new Map()) {
       }
     }
 
+    // A string `reasoning_content` on the assistant turn is the OpenAI-shaped
+    // spelling of prior thinking (GLM, Qwen, DeepSeek, Kimi, Step, Hunyuan all
+    // emit it — see concerns/reasoning.js). Dropping it loses the model's own
+    // earlier reasoning from the replayed context. Thinking must precede text on
+    // the Claude wire, so it is unshifted.
+    const reasoning = typeof msg.reasoning_content === "string" ? msg.reasoning_content.trim() : "";
+    if (reasoning) {
+      blocks.unshift({ type: CLAUDE_BLOCK.THINKING, thinking: reasoning });
+    }
+
     if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
       for (const tc of msg.tool_calls) {
         if (tc.type === OPENAI_BLOCK.FUNCTION) {

@@ -21,12 +21,10 @@ const KIRO_EVENT_TYPES = new Set([
   "reasoningContentEvent",
   "codeEvent",
   "toolUseEvent",
-  "messageStopEvent",
   "metadataEvent",
   "MetadataEvent",
   "contextUsageEvent",
-  "meteringEvent",
-  "metricsEvent"
+  "meteringEvent"
 ]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -232,17 +230,19 @@ export class KiroExecutor extends BaseExecutor {
     super("kiro", PROVIDERS.kiro);
   }
 
-  buildHeaders(credentials, stream = true, url = "") {
+  // Signature must mirror BaseExecutor's call site: (credentials, stream, url, model).
+  // `model` is accepted for signature parity and is not used here.
+  buildHeaders(credentials, stream = true, url = "", _model = null, attempt = 1) {
+    // Attempt number is threaded through so a retry raises BOTH retry headers,
+    // as the real client does (measured: attempt=2 in each after one retry).
+    // Callers that know the live attempt pass it as the 5th arg; the default of 1
+    // preserves the previous single-shot header for existing call paths.
+    const attemptHeader = `attempt=${attempt}; max=3`;
     const headers = {
       ...this.config.headers,
-      "Amz-Sdk-Request": "attempt=1; max=3",
-      "Amz-Sdk-Invocation-Id": uuidv4()
+      "amz-sdk-request": attemptHeader,
+      "amz-sdk-invocation-id": uuidv4()
     };
-    if (url.includes("://codewhisperer.")) {
-      headers["X-Amz-Target"] = KIRO_CODEWHISPERER_TARGET;
-    } else {
-      delete headers["X-Amz-Target"];
-    }
 
     // API-key auth: the key is stored as accessToken and sent as a bearer token
     // exactly like an OAuth access token, but with an extra `tokentype: API_KEY`
@@ -265,6 +265,35 @@ export class KiroExecutor extends BaseExecutor {
       }
     }
 
+    // OAuth/CLI fingerprint. Verified against a captured kiro-cli 2.21.4 session
+    // (docs/03-chat-request-spec.md). These four headers are what the real client
+    // sends on every inference call, and what this executor previously lacked.
+    //
+    // Deliberately NOT replicated: x-amz-sso-bearer, x-amzn-kiro-agent-mode,
+    // x-amzn-codewhisperer-machine-id, x-amzn-codewhisperer-profile-arn. None of
+    // them appear in captured CLI traffic — the profile ARN travels in the body.
+    // They are kept for the non-OAuth methods that historically needed them, so
+    // this change cannot regress API-key/external_idp connections.
+    const isOAuthCli =
+      authMethod === "builder-id" || authMethod === "idc" ||
+      authMethod === "google" || authMethod === "github" ||
+      authMethod === "import";
+
+    if (isOAuthCli) {
+      headers["x-amz-target"] = KIRO_CODEWHISPERER_TARGET;
+      headers["x-amzn-codewhisperer-optout"] = "false";
+      // No space after the semicolon here — kiro's own AttemptHeaderInterceptor
+      // formats it that way, unlike the smithy `amz-sdk-request` above.
+      headers["x-kiro-attempt"] = `${attempt};max=3`;
+      return headers;
+    }
+
+    if (url.includes("://codewhisperer.")) {
+      headers["X-Amz-Target"] = KIRO_CODEWHISPERER_TARGET;
+    } else {
+      delete headers["X-Amz-Target"];
+    }
+
     // CLIRO parity for the Amazon surfaces: the Kiro runtime accepts the
     // SSO bearer header + agent-mode marker. Without these the deprecated
     // path gateway answers REQUEST_BODY_INVALID for modern payloads.
@@ -284,17 +313,22 @@ export class KiroExecutor extends BaseExecutor {
   /**
    * Auth-aware endpoint ordering.
    *
-   * API-key Kiro connections use the Amazon Q surface. The legacy
-   * codewhisperer.* GenerateAssistantResponse endpoint can authenticate the key
-   * but rejects the same valid payload with REQUEST_BODY_INVALID. Since a 400
-   * is terminal in BaseExecutor, putting CodeWhisperer first prevents the working
-   * q.* endpoint from ever being tried. Keep q.* first only for api_key accounts.
+   * OAuth/CLI methods (builder-id, idc, google, github, import) keep the
+   * registry order — runtime.us-east-1.kiro.dev first. A captured kiro-cli
+   * session POSTs to the bare root of that host and receives 200, so it is the
+   * correct primary surface for these tokens.
    *
-   * The Kiro IDE gateway (runtime.*.kiro.dev) expects Kiro OIDC/social tokens
-   * and rejects TokenType=API_KEY. External IdP enterprise tokens instead
-   * use the CodeWhisperer surface, with the `TokenType: EXTERNAL_IDP` header.
-   * Other OAuth methods keep the default order (kiro.dev first) since their
-   * tokens are what that gateway accepts.
+   * API-key and External-IdP connections use the Amazon surfaces: the legacy
+   * codewhisperer.* endpoint can authenticate the key but rejects a valid
+   * payload with REQUEST_BODY_INVALID, and a 400 is terminal in BaseExecutor,
+   * so the working q.* endpoint must be tried first for them. External IdP
+   * tokens use the codewhisperer surface with `TokenType: EXTERNAL_IDP`.
+   *
+   * Historical note: this used to force q.* first for EVERY method, on the
+   * theory that runtime.* rejected modern payloads with 400. That 400 was more
+   * likely caused by 9router's own body shape (wrong origin/modelId, extra
+   * top-level keys) — corrected in the translator. The fallback chain is kept,
+   * so a genuine 400 on runtime.* still falls through to the Amazon surfaces.
    */
   getOrderedBaseUrls(credentials) {
     const baseUrls = this.getBaseUrls();
@@ -318,13 +352,37 @@ export class KiroExecutor extends BaseExecutor {
         ? u.replace(/([a-z]+)\.[a-z0-9-]+\.amazonaws\.com/, `$1.${region}.amazonaws.com`)
         : u;
 
+    // Only the sign-ins whose token the kiro.dev gateway actually accepts may
+    // reach runtime.* first: the real kiro-cli posts there and gets 200
+    // (captured, docs/03-chat-request-spec.md). This list is NOT the same as the
+    // header-level OAuth list in buildHeaders(): `idc` uses the modern body/header
+    // shape but its SSO access token is rejected by the gateway with 403, so it
+    // must stay on the Amazon surfaces (see the idc note above).
+    const runtimeFirst =
+      authMethod === "builder-id" ||
+      authMethod === "google" || authMethod === "github" ||
+      authMethod === "import";
+
     const amazon = baseUrls.filter((u) => u.includes("amazonaws.com")).map(regionalize);
     const others = baseUrls.filter((u) => !u.includes("amazonaws.com"));
-    const q = amazon.filter((u) => u.includes("://q."));
-    const remaining = amazon.filter((u) => !u.includes("://q."));
-    return q.length > 0
-      ? [...q, ...remaining, ...others]
-      : [...amazon, ...others];
+
+    if (runtimeFirst) {
+      return [...others, ...amazon];
+    }
+
+    // q.* first, but ONLY for api_key (16cb40fd): the codewhisperer.* endpoint
+    // authenticates an API key yet rejects the same valid payload with
+    // REQUEST_BODY_INVALID, and a 400 is terminal, so the working surface must
+    // lead or it is never tried. external_idp and idc bind to the CodeWhisperer
+    // surface itself (TokenType: EXTERNAL_IDP / SSO token), so they keep the
+    // registry order and must not be reordered onto q.*.
+    if (authMethod === "api_key") {
+      const q = amazon.filter((u) => u.includes("://q."));
+      const remaining = amazon.filter((u) => !u.includes("://q."));
+      if (q.length > 0) return [...q, ...remaining, ...others];
+    }
+
+    return [...amazon, ...others];
   }
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
@@ -343,6 +401,53 @@ export class KiroExecutor extends BaseExecutor {
 
   transformRequest(model, body, stream, credentials) {
     return body;
+  }
+
+  /**
+   * Kiro rejects a request with a plain JSON body (NOT an EventStream frame):
+   *
+   *   HTTP 400
+   *   x-amzn-RequestId: d4129996-f4f5-4a5f-977c-8cbe70b12164
+   *   {"__type": "com.amazon.kiro.runtimeservice#ValidationException",
+   *    "message": "Invalid model ID. Please select a different model to continue.",
+   *    "reason": "INVALID_MODEL_ID"}
+   *
+   * The default parser only lifts `message`, so `reason` and the correlation id
+   * are lost. `reason` is the machine-readable class the retry taxonomy keys on,
+   * and the request id is what support asks for, so surface both in the message.
+   * Captured format: docs/08-eventstream-and-tools.md §4.4.
+   */
+  parseError(response, bodyText) {
+    const base = super.parseError(response, bodyText);
+    let parsed;
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch {
+      return base;
+    }
+    if (!parsed || typeof parsed !== "object") return base;
+
+    const requestId =
+      response?.headers?.get?.("x-amzn-requestid") ||
+      response?.headers?.get?.("x-amzn-RequestId") ||
+      null;
+
+    const parts = [];
+    if (typeof parsed.message === "string" && parsed.message) parts.push(parsed.message);
+    if (typeof parsed.reason === "string" && parsed.reason) parts.push(`reason=${parsed.reason}`);
+    if (requestId) parts.push(`request_id=${requestId}`);
+
+    // __type's trailing segment is the exception class, e.g. "ValidationException".
+    const exceptionType =
+      typeof parsed.__type === "string" ? parsed.__type.split("#").pop() : null;
+    if (exceptionType) parts.push(`(${exceptionType})`);
+
+    return {
+      status: base.status,
+      message: parts.length > 0 ? parts.join(" ") : base.message,
+      kiroReason: typeof parsed.reason === "string" ? parsed.reason : null,
+      requestId,
+    };
   }
 
   /**
@@ -606,7 +711,7 @@ export class KiroExecutor extends BaseExecutor {
         ? "upstream_error"
         : safeDiagnostics.terminal_provenance === "integrity_buffer_exceeded"
           ? "terminal_stop"
-        : ["metadata_stop_reason", "message_stop_event"].includes(safeDiagnostics.terminal_provenance)
+        : safeDiagnostics.terminal_provenance === "metadata_stop_reason"
           ? "terminal_stop"
           : "missing_terminal";
       return { kind, message: output.error?.message, diagnostics: safeDiagnostics };
@@ -869,15 +974,11 @@ export class KiroExecutor extends BaseExecutor {
           }
           appendToolInput(tool, value.input);
         }
-      } else if (eventType === "messageStopEvent") {
-        state.explicitStop = true;
-        const reason = normalizeStopReason(
-          event.payload?.stopReason ?? event.payload?.stop_reason
-        ) || (state.sawToolUse ? "tool_use" : "end_turn");
-        const merged = mergeStopReason(state.stopReason, reason);
-        if (merged !== state.stopReason) state.terminalProvenance = "message_stop_event";
-        state.stopReason = merged;
       } else if (eventType === "metadataEvent" || eventType === "MetadataEvent") {
+        // metadataEvent is the turn terminator and carries more than stopReason:
+        // contextUsage (with an invalidation flag), a per-turn meteringUsage
+        // array, turnDurationMs, the applied effort, and a structured refusal.
+        // See docs/08-eventstream-and-tools.md §1.9.
         const metadata = event.payload?.metadataEvent || event.payload?.metadata || event.payload;
         const reason = normalizeStopReason(metadata?.stopReason ?? metadata?.stop_reason);
         if (reason) {
@@ -885,6 +986,50 @@ export class KiroExecutor extends BaseExecutor {
           const merged = mergeStopReason(state.stopReason, reason);
           if (merged !== state.stopReason) state.terminalProvenance = "metadata_stop_reason";
           state.stopReason = merged;
+        }
+
+        if (metadata?.contextUsageInvalidated === true) {
+          state.contextUsagePercentage = null;
+          state.hasContextUsage = false;
+        } else if (Number.isFinite(Number(metadata?.contextUsagePercentage))) {
+          state.contextUsagePercentage = Number(metadata.contextUsagePercentage);
+          state.hasContextUsage = true;
+        }
+
+        if (Number.isFinite(Number(metadata?.turnDurationMs))) {
+          state.turnDurationMs = Number(metadata.turnDurationMs);
+        }
+        if (typeof metadata?.effort === "string") {
+          state.appliedEffort = metadata.effort;
+        }
+
+        // A refusal means the model declined and produced no usable text; the
+        // caller should surface it rather than return an empty completion.
+        const refusal = metadata?.refusal;
+        if (refusal && typeof refusal === "object") {
+          state.refusal = {
+            category: refusal.category ?? null,
+            explanation: refusal.explanation ?? null,
+            recommendedModel: refusal.recommendedModel ?? null,
+          };
+        }
+
+        // Per-turn metering summary (array), distinct from the scalar
+        // meteringEvent.usage handled below.
+        const meteringUsage = metadata?.meteringUsage;
+        if (Array.isArray(meteringUsage) && meteringUsage.length > 0) {
+          state.hasMetering = true;
+          const total = meteringUsage.reduce((sum, entry) => {
+            const value = Number(entry?.usage ?? entry);
+            return sum + (Number.isFinite(value) ? value : 0);
+          }, 0);
+          if (Number.isFinite(total) && total > 0) {
+            state.usage = {
+              ...(state.usage || {}),
+              kiro_credits: total,
+              kiro_credit_unit: "credit",
+            };
+          }
         }
       } else if (eventType === "contextUsageEvent") {
         const percentage = Number(event.payload?.contextUsagePercentage);
@@ -903,23 +1048,12 @@ export class KiroExecutor extends BaseExecutor {
             kiro_credit_unit: typeof metering.unit === "string" ? metering.unit : "credit"
           };
         }
-      } else if (eventType === "metricsEvent") {
-        const metrics = event.payload?.metricsEvent || event.payload || {};
-        const prompt = Number(metrics.inputTokens) || 0;
-        const completion = Number(metrics.outputTokens) || 0;
-        if (prompt || completion) {
-          state.usage = {
-            ...(state.usage || {}),
-            prompt_tokens: prompt,
-            completion_tokens: completion,
-            total_tokens: prompt + completion
-          };
-          const cacheRead = Number(metrics.cacheReadInputTokens || metrics.cache_read_input_tokens) || 0;
-          const cacheCreate = Number(metrics.cacheCreationInputTokens || metrics.cache_creation_input_tokens) || 0;
-          if (cacheRead) state.usage.cache_read_input_tokens = cacheRead;
-          if (cacheCreate) state.usage.cache_creation_input_tokens = cacheCreate;
-        }
       }
+      // Any other :event-type is intentionally ignored rather than treated as an
+      // error. The binary declares ~17 variants (citation, follow-up, dry-run,
+      // message-metadata, invalid-state, …) that this provider has no use for;
+      // only 7 have ever been observed on the wire. Failing on an unrecognised
+      // event would turn a usable turn into a hard error.
       return true;
     };
     const processBytes = (chunk, controller) => {

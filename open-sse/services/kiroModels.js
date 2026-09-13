@@ -93,6 +93,52 @@ function buildKiroFingerprintHeaders(credentials) {
 }
 
 /**
+ * Parse a catalog entry's `additionalModelRequestFieldsSchema` into the
+ * effort contract Kiro actually enforces for that model.
+ *
+ * Only some models accept additionalModelRequestFields at all, and they split
+ * into two shapes. Captured verbatim from the live catalog (work/model_catalog.txt):
+ *
+ *   claude-opus-5   {"properties":{"output_config":{"properties":{"effort":
+ *                    {"enum":["low","medium","high","xhigh","max"],"default":"high"}}}}}
+ *   claude-opus-4.6  ... same, but enum stops at "max" (no xhigh)
+ *   claude-opus-4.7  ... same as opus-5, default "xhigh"
+ *   gpt-5.6-sol     {"properties":{"reasoning":{"properties":{"effort":
+ *                    {"enum":["none","low","medium","high","xhigh","max"],"default":"high"}}}}}
+ *
+ * Non-Claude / non-GPT models (and legacy Claude 4.5 / 4) carry no schema and
+ * must not be sent additionalModelRequestFields.
+ *
+ * @param {object} entry One raw model from ListAvailableModels
+ * @returns {{ path: string, levels: string[], default: string|null } | null}
+ *   `path` is the wire key ("output_config" | "reasoning"), `levels` the
+ *   accepted enum (empty when the schema names no effort), or null when the
+ *   model accepts no additionalModelRequestFields.
+ */
+export function parseKiroEffortSchema(entry) {
+  const schema = entry?.additionalModelRequestFieldsSchema;
+  const props = schema?.properties;
+  if (!props || typeof props !== "object") return null;
+
+  for (const path of ["output_config", "reasoning"]) {
+    const effort = props[path]?.properties?.effort;
+    if (!effort || typeof effort !== "object") continue;
+    const levels = Array.isArray(effort.enum) ? effort.enum.filter((v) => typeof v === "string") : [];
+    const preferred = typeof effort.default === "string" ? effort.default : null;
+    return { path, levels, default: preferred };
+  }
+  return null;
+}
+
+/**
+ * The effort level Kiro will use when the caller names none, per the catalog.
+ * Returns null for models that accept no additionalModelRequestFields.
+ */
+export function kiroDefaultEffort(entry) {
+  return parseKiroEffortSchema(entry)?.default ?? null;
+}
+
+/**
  * Build the synthetic 9router variant set for a single upstream Kiro model.
  *
  * Returns objects shaped for `PROVIDER_MODELS` (`{ id, name }`) so they can
@@ -293,6 +339,7 @@ export async function resolveKiroModels(credentials, options = {}) {
     if (!upstreamId) continue;
     const display = formatDisplayName(m.modelName, upstreamId, m.rateMultiplier);
     const ctx = Number(m?.tokenLimits?.maxInputTokens) || 200_000;
+    const effort = parseKiroEffortSchema(m);
     for (const v of buildVariants(upstreamId, display)) {
       expanded.push({
         ...v,
@@ -301,7 +348,11 @@ export async function resolveKiroModels(credentials, options = {}) {
         contextLength: ctx,
         rateMultiplier: Number.isFinite(Number(m.rateMultiplier)) ? Number(m.rateMultiplier) : 1.0,
         upstreamModelId: upstreamId,
-        description: m.description || ""
+        description: m.description || "",
+        // The catalog's own effort contract for this model, both path and the
+        // accepted level set. null when the model takes no effort fields.
+        effortSchema: effort,
+        supportsEffort: effort !== null
       });
     }
   }

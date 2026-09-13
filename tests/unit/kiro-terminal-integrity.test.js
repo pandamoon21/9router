@@ -194,8 +194,12 @@ describe("Kiro terminal integrity recovery", () => {
     expect(body).toContain('"finish_reason":"stop"');
   });
 
-  it("accepts messageStop without semantic output as explicit completion", async () => {
-    fetchMock.mockResolvedValueOnce(response([frame("messageStopEvent", {})]));
+  it("accepts a stopReason-only terminator with no model output as explicit completion", async () => {
+    // metadataEvent is the real terminator (33/33 captures end with one);
+    // `messageStopEvent` was an invented type and is now correctly ignored.
+    fetchMock.mockResolvedValueOnce(response([
+      frame("metadataEvent", { stopReason: "END_TURN" })
+    ]));
 
     const body = await (await execute()).response.text();
 
@@ -416,19 +420,24 @@ describe("Kiro terminal integrity recovery", () => {
     expect(body).not.toContain('"finish_reason":"stop"');
   });
 
+  // A conflict must be built from event types Kiro actually emits. The old
+  // version used `messageStopEvent`, which does not exist in the wire protocol —
+  // 33 captured EventStream bodies contain only 7 types, and messageStopEvent is
+  // not one of them (docs/08-eventstream-and-tools.md). Two metadataEvents with
+  // different reasons is the real shape of a conflicting terminator.
   it.each([
-    [
-      frame("messageStopEvent", { stopReason: "content_filtered" }),
-      frame("metadataEvent", { stopReason: "end_turn" })
-    ],
-    [
-      frame("metadataEvent", { stopReason: "end_turn" }),
-      frame("messageStopEvent", { stopReason: "content_filtered" })
-    ]
-  ])("preserves the most restrictive conflicting stop reason", async (...stopFrames) => {
+    "content_filtered before end_turn",
+    "end_turn before content_filtered",
+  ])("preserves the most restrictive conflicting stop reason (%s)", async (ordering) => {
+    const filtered = frame("metadataEvent", { stopReason: "content_filtered" });
+    const endTurn = frame("metadataEvent", { stopReason: "end_turn" });
+    const frames = ordering.startsWith("content_filtered")
+      ? [filtered, endTurn]
+      : [endTurn, filtered];
+
     fetchMock.mockResolvedValueOnce(response([
       frame("assistantResponseEvent", { content: "private filtered output" }),
-      ...stopFrames
+      ...frames
     ]));
 
     const body = await (await execute()).response.text();
@@ -442,7 +451,7 @@ describe("Kiro terminal integrity recovery", () => {
     fetchMock.mockResolvedValueOnce(response([
       frame("assistantResponseEvent", { content: "private malformed output" }),
       frame("metadataEvent", { stopReason: "malformed_model_output" }),
-      frame("messageStopEvent", { stopReason: "cancelled" })
+      frame("metadataEvent", { stopReason: "cancelled" })
     ]));
 
     const body = await (await execute()).response.text();

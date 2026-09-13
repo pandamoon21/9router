@@ -30,6 +30,12 @@ import {
   usesKiroNativeGptEffort,
 } from "../../config/kiroConstants.js";
 import { DEFAULT_IMAGE_MIME } from "../schema/index.js";
+import {
+  buildKiroEnvState,
+  KIRO_CLI_ORIGIN,
+  KIRO_CLI_AGENT_TASK_TYPE,
+  newKiroAgentContinuationId,
+} from "../concerns/kiroClientParity.js";
 import { ROLE, CLAUDE_BLOCK } from "../schema/index.js";
 import {
   canonicalizeKiroConversation,
@@ -300,13 +306,19 @@ export function claudeToKiroRequest(model, body, stream, credentials) {
     return null;
   }
   const replayCurrent = canonical.currentMessage.userInputMessage;
+  // --- kiro-cli parity (captured 2026-09-13) -------------------------------
+  // origin is KIRO_CLI (not AI_EDITOR), envState is always present, and the
+  // conversationState carries agentTaskType/agentContinuationId. Body top level
+  // is exactly { conversationState, profileArn } — no inferenceConfig.
+  // See docs/03-chat-request-spec.md.
   const userInputMessage = {
     content: replayCurrent.content || "",
     modelId: upstreamModel,
-    origin: "AI_EDITOR",
-    ...(replayCurrent.userInputMessageContext && {
-      userInputMessageContext: replayCurrent.userInputMessageContext,
-    }),
+    origin: KIRO_CLI_ORIGIN,
+    userInputMessageContext: {
+      envState: buildKiroEnvState(),
+      ...(replayCurrent.userInputMessageContext || {}),
+    },
     ...(replayCurrent.images && {
       images: replayCurrent.images,
     }),
@@ -316,6 +328,8 @@ export function claudeToKiroRequest(model, body, stream, credentials) {
     conversationState: {
       chatTriggerType: "MANUAL",
       conversationId,
+      agentTaskType: KIRO_CLI_AGENT_TASK_TYPE,
+      agentContinuationId: newKiroAgentContinuationId(),
       currentMessage: {
         userInputMessage,
       },
@@ -328,12 +342,9 @@ export function claudeToKiroRequest(model, body, stream, credentials) {
     payload.additionalModelRequestFields = additionalModelRequestFields;
   }
 
-  if (maxTokens || temperature !== undefined || topP !== undefined) {
-    payload.inferenceConfig = {};
-    if (maxTokens) payload.inferenceConfig.maxTokens = maxTokens;
-    if (temperature !== undefined) payload.inferenceConfig.temperature = temperature;
-    if (topP !== undefined) payload.inferenceConfig.topP = topP;
-  }
+  // `maxTokens`/`temperature`/`topP` are intentionally NOT forwarded — see the
+  // note in openai-to-kiro.js. An unknown top-level key is a fingerprint
+  // difference and the CLI never sends inferenceConfig.
 
   // Non-enumerable hint so the executor can route the upstream model id.
   Object.defineProperty(payload, "_kiroUpstreamModel", {
