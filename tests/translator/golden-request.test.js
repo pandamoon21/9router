@@ -31,6 +31,10 @@ function baseBody() {
 function clean(body) {
   const s = JSON.stringify(body, (k, v) => {
     if (k === "_toolNameMap" || k === "conversationId") return undefined;
+    // kiro-cli parity added a per-turn fresh UUID and a machine-specific cwd;
+    // both are legitimately variable and must not be snapshotted.
+    if (k === "agentContinuationId") return "<UUID>";
+    if (k === "currentWorkingDirectory") return "<CWD>";
     return v;
   }).replace(/Current time is [^"\\]+/g, "Current time is <TS>");
   return JSON.parse(s);

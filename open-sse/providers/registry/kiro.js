@@ -1,3 +1,29 @@
+// kiro-cli 2.21.4 client fingerprint (Rust SDK grammar). Captured verbatim from
+// real CLI traffic; see docs/03-chat-request-spec.md.
+//
+//   user-agent      -> business-metric tag `md/appVersion-<v>`, app name, os/lang.
+//                      NO ua/2.1, NO api/.
+//   x-amz-user-agent-> ua/2.1 + api/<service>/<ver> + m/<feature-flags>, NO md/.
+//
+// The `api/` service token differs per operation and MUST be parameterised when
+// reused: `codewhispererstreaming` (GenerateAssistantResponse),
+// `codewhispererruntime` (catalog / telemetry-event), `toolkittelemetry`,
+// `ssooidc`. Only the inference constant is defined here.
+export const KIRO_SDK_VERSION = "1.3.15";
+export const KIRO_RUST_VERSION = "1.92.0";
+export const KIRO_CLI_VERSION = "2.21.4";
+export const KIRO_CODEWHISPERERSTREAMING_API_VERSION = "0.1.17975";
+
+const kirosdk = `${KIRO_SDK_VERSION} ua/2.1`;
+
+export const KIRO_CLI_USER_AGENT =
+  `aws-sdk-rust/${KIRO_SDK_VERSION} os/windows lang/rust/${KIRO_RUST_VERSION} ` +
+  `md/appVersion-${KIRO_CLI_VERSION} app/AmazonQ-For-CLI`;
+
+export const KIRO_CLI_X_AMZ_USER_AGENT =
+  `aws-sdk-rust/${kirosdk} api/codewhispererstreaming/${KIRO_CODEWHISPERERSTREAMING_API_VERSION} ` +
+  `os/windows lang/rust/${KIRO_RUST_VERSION} m/F app/AmazonQ-For-CLI`;
+
 export default {
   id: "kiro",
   priority: 10,
@@ -16,9 +42,12 @@ export default {
   },
   category: "free",
   transport: {
-    baseUrl: "https://runtime.us-east-1.kiro.dev/generateAssistantResponse",
+    // kiro-cli POSTs to the bare host root; the operation is selected entirely
+    // by `x-amz-target`. The /generateAssistantResponse path form is a legacy
+    // surface kept for the Amazon hosts below, which may still require it.
+    baseUrl: "https://runtime.us-east-1.kiro.dev/",
     baseUrls: [
-      "https://runtime.us-east-1.kiro.dev/generateAssistantResponse",
+      "https://runtime.us-east-1.kiro.dev/",
       "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
       "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
     ],
@@ -26,11 +55,19 @@ export default {
     retry: {
       "429": 0,
     },
+    // Wire fingerprint of the kiro-cli 2.21.4 Rust client (captured 2026-09-13).
+    // `user-agent` and `x-amz-user-agent` are deliberately DIFFERENT grammars:
+    //   user-agent     : no ua/2.1, no api/, carries md/appVersion-<v>
+    //   x-amz-user-agent: carries ua/2.1 + api/<service>/<ver> + m/<flags>, no md/
+    // Do not unify them. The api/ token is inference-specific
+    // (codewhispererstreaming); the catalog call uses codewhispererruntime and
+    // telemetry uses toolkittelemetry — parameterise rather than reusing blindly.
+    // See docs/03-chat-request-spec.md and 05-client-fingerprint.md.
     headers: {
-      "Content-Type": "application/json",
-      Accept: "application/vnd.amazon.eventstream",
-      "User-Agent": "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
-      "X-Amz-User-Agent": "aws-sdk-js/3.0.0 kiro-ide/1.0.0",
+      "Content-Type": "application/x-amz-json-1.0",
+      Accept: "*/*",
+      "User-Agent": KIRO_CLI_USER_AGENT,
+      "X-Amz-User-Agent": KIRO_CLI_X_AMZ_USER_AGENT,
     },
     tokenUrl: "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken",
     authUrl: "https://prod.us-east-1.auth.desktop.kiro.dev",

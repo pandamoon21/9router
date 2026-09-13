@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { KiroExecutor } from "../../open-sse/executors/kiro.js";
 
-const RUNTIME = "https://runtime.us-east-1.kiro.dev/generateAssistantResponse";
+const RUNTIME = "https://runtime.us-east-1.kiro.dev/";
 const CODEWHISPERER = "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse";
 const Q = "https://q.us-east-1.amazonaws.com/generateAssistantResponse";
 
@@ -12,6 +12,9 @@ function credentials(authMethod, region = "us-east-1") {
 describe("Kiro auth-aware endpoint routing", () => {
   const executor = new KiroExecutor();
 
+  // kiro-cli sends its inference turns to the bare runtime host root and lets
+  // x-amz-target select the operation (captured 2026-09-14). So OAuth-style
+  // credentials — which is what the CLI uses — must reach runtime.* FIRST.
   it("routes API-key inference through Amazon Q before other surfaces", () => {
     expect(executor.getOrderedBaseUrls(credentials("api_key"))).toEqual([
       Q,
@@ -20,26 +23,33 @@ describe("Kiro auth-aware endpoint routing", () => {
     ]);
   });
 
-  it("routes Builder ID OAuth through Amazon Q first (runtime path deprecated)", () => {
+  it("routes Builder ID OAuth through the runtime host first, like kiro-cli", () => {
+    // OAuth keeps the registry order for the Amazon surfaces (codewhisperer
+    // before q), with runtime.* hoisted in front.
     expect(executor.getOrderedBaseUrls(credentials("builder-id"))).toEqual([
-      Q,
-      CODEWHISPERER,
       RUNTIME,
+      CODEWHISPERER,
+      Q,
     ]);
   });
 
-  it("routes external IdP through Amazon Q first", () => {
+  // external_idp binds via TokenType: EXTERNAL_IDP on the CodeWhisperer
+  // surface, so it keeps the registry order rather than the api_key q.* hop.
+  it("routes external IdP through CodeWhisperer first", () => {
     expect(executor.getOrderedBaseUrls(credentials("external_idp"))).toEqual([
-      Q,
       CODEWHISPERER,
+      Q,
       RUNTIME,
     ]);
   });
 
-  it("regionalizes AWS endpoints for IDC with Q first", () => {
+  // idc uses the modern header/body shape but its SSO access token is rejected
+  // by the kiro.dev gateway with 403, so it stays on the Amazon surfaces — in
+  // registry order (CodeWhisperer before q), not the api_key q.* hop.
+  it("regionalizes AWS endpoints for IDC, CodeWhisperer first", () => {
     expect(executor.getOrderedBaseUrls(credentials("idc", "eu-west-1"))).toEqual([
-      "https://q.eu-west-1.amazonaws.com/generateAssistantResponse",
       "https://codewhisperer.eu-west-1.amazonaws.com/generateAssistantResponse",
+      "https://q.eu-west-1.amazonaws.com/generateAssistantResponse",
       RUNTIME,
     ]);
   });

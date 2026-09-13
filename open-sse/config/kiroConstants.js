@@ -171,17 +171,44 @@ export function resolveKiroThinkingBudget(body, headers, model) {
   return null;
 }
 
-export function extractKiroEffortLevel(body) {
+// Effort enums are read from the live catalog's additionalModelRequestFieldsSchema.
+// Source of truth: work/model_schemas.txt (captured 2026-09-14). Verbatim:
+//
+//   claude-opus-5    path=output_config enum=[low,medium,high,xhigh,max] default=high
+//   claude-sonnet-5  path=output_config enum=[low,medium,high,xhigh,max] default=high
+//   claude-opus-4.8  path=output_config enum=[low,medium,high,xhigh,max] default=high
+//   claude-opus-4.7  path=output_config enum=[low,medium,high,xhigh,max] default=xhigh
+//   claude-opus-4.6  path=output_config enum=[low,medium,high,max]       default=high
+//   claude-sonnet-4.6 path=output_config enum=[low,medium,high,max]     default=high
+//   gpt-5.6-{sol,terra,luna} path=reasoning enum=[none,low,medium,high,xhigh,max] default=high
+//   claude-{opus,sonnet,haiku}-4.5, claude-sonnet-4, and every non-Claude/non-GPT
+//   model: no additionalModelRequestFieldsSchema at all.
+//
+// `xhigh` and `max` are real wire values, NOT aliases for `high`. Only 4.6-class
+// models lack `xhigh`; the model id encodes which generation it is, so the gate
+// lives in resolveKiroEffortPath, not here.
+const KIRO_CLAUDE_EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const KIRO_GPT_EFFORT_LEVELS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
+
+// Models whose captured enum stops at `max` — the 4.6 generation only.
+const KIRO_CLAUDE_EFFORT_NO_XHIGH = /(?:^|[\/.])claude[/.](?:opus|sonnet)[/.]4[/.]6(?:[/.]|$)/;
+
+export function extractKiroEffortLevel(body, model = null) {
   const effort =
     body?.output_config?.effort ??
     body?.reasoning_effort ??
     (typeof body?.reasoning === "object" ? body.reasoning?.effort : null);
   if (typeof effort !== "string") return null;
   const normalized = effort.toLowerCase();
+  // Aliases the caller may use that mean "no reasoning". Claude has no wire `none`.
   if (normalized === "none" || normalized === "off" || normalized === "disabled") return null;
-  if (normalized === "xhigh" || normalized === "max") return "high";
-  if (["low", "medium", "high"].includes(normalized)) return normalized;
-  return null;
+  if (!KIRO_CLAUDE_EFFORT_LEVELS.has(normalized)) return null;
+  // xhigh postdates the 4.6 models; anything else on the Claude path advertises it.
+  // Model ids arrive dash-separated (claude-opus-4.6) while the pattern uses dots.
+  if (normalized === "xhigh" && typeof model === "string") {
+    if (KIRO_CLAUDE_EFFORT_NO_XHIGH.test(model.toLowerCase().replace(/-/g, "."))) return null;
+  }
+  return normalized;
 }
 
 function extractKiroGptEffortLevel(body) {
@@ -191,18 +218,14 @@ function extractKiroGptEffortLevel(body) {
     (typeof body?.reasoning === "object" ? body.reasoning?.effort : null);
   if (typeof effort !== "string") return null;
   const normalized = effort.toLowerCase();
-  if (normalized === "max") return "xhigh";
-  // Kiro CLI does not advertise an explicit GPT "none" wire value; omit it.
-  if (["low", "medium", "high", "xhigh"].includes(normalized)) {
-    return normalized;
-  }
-  return null;
+  // GPT advertises an explicit `none` level (unlike Claude).
+  return KIRO_GPT_EFFORT_LEVELS.has(normalized) ? normalized : null;
 }
 
-export function buildKiroAdditionalModelRequestFields(body, effortPath = "output_config") {
+export function buildKiroAdditionalModelRequestFields(body, effortPath = "output_config", model = null) {
   const effort = effortPath === "reasoning"
     ? extractKiroGptEffortLevel(body)
-    : extractKiroEffortLevel(body);
+    : extractKiroEffortLevel(body, model);
   if (!effort) return undefined;
   if (effortPath === "reasoning") {
     // Mirrors Kiro CLI/KAS buildEffortRequestFields("reasoning") for GPT.
@@ -248,7 +271,7 @@ export function usesKiroNativeGptEffort(body, model) {
 export function buildKiroAdditionalModelRequestFieldsForModel(body, model) {
   const effortPath = resolveKiroEffortPath(model);
   if (!effortPath) return undefined;
-  return buildKiroAdditionalModelRequestFields(body, effortPath);
+  return buildKiroAdditionalModelRequestFields(body, effortPath, model);
 }
 
 /**
