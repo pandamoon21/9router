@@ -42,9 +42,12 @@ export default {
   },
   category: "free",
   transport: {
-    baseUrl: "https://runtime.us-east-1.kiro.dev/generateAssistantResponse",
+    // kiro-cli POSTs to the bare host root; the operation is selected entirely
+    // by `x-amz-target`. The /generateAssistantResponse path form is a legacy
+    // surface kept for the Amazon hosts below, which may still require it.
+    baseUrl: "https://runtime.us-east-1.kiro.dev/",
     baseUrls: [
-      "https://runtime.us-east-1.kiro.dev/generateAssistantResponse",
+      "https://runtime.us-east-1.kiro.dev/",
       "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
       "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
     ],

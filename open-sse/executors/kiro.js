@@ -315,17 +315,22 @@ export class KiroExecutor extends BaseExecutor {
   /**
    * Auth-aware endpoint ordering.
    *
-   * API-key Kiro connections use the Amazon Q surface. The legacy
-   * codewhisperer.* GenerateAssistantResponse endpoint can authenticate the key
-   * but rejects the same valid payload with REQUEST_BODY_INVALID. Since a 400
-   * is terminal in BaseExecutor, putting CodeWhisperer first prevents the working
-   * q.* endpoint from ever being tried. Keep q.* first only for api_key accounts.
+   * OAuth/CLI methods (builder-id, idc, google, github, import) keep the
+   * registry order — runtime.us-east-1.kiro.dev first. A captured kiro-cli
+   * session POSTs to the bare root of that host and receives 200, so it is the
+   * correct primary surface for these tokens.
    *
-   * The Kiro IDE gateway (runtime.*.kiro.dev) expects Kiro OIDC/social tokens
-   * and rejects TokenType=API_KEY. External IdP enterprise tokens instead
-   * use the CodeWhisperer surface, with the `TokenType: EXTERNAL_IDP` header.
-   * Other OAuth methods keep the default order (kiro.dev first) since their
-   * tokens are what that gateway accepts.
+   * API-key and External-IdP connections use the Amazon surfaces: the legacy
+   * codewhisperer.* endpoint can authenticate the key but rejects a valid
+   * payload with REQUEST_BODY_INVALID, and a 400 is terminal in BaseExecutor,
+   * so the working q.* endpoint must be tried first for them. External IdP
+   * tokens use the codewhisperer surface with `TokenType: EXTERNAL_IDP`.
+   *
+   * Historical note: this used to force q.* first for EVERY method, on the
+   * theory that runtime.* rejected modern payloads with 400. That 400 was more
+   * likely caused by 9router's own body shape (wrong origin/modelId, extra
+   * top-level keys) — corrected in the translator. The fallback chain is kept,
+   * so a genuine 400 on runtime.* still falls through to the Amazon surfaces.
    */
   getOrderedBaseUrls(credentials) {
     const baseUrls = this.getBaseUrls();
@@ -349,8 +354,26 @@ export class KiroExecutor extends BaseExecutor {
         ? u.replace(/([a-z]+)\.[a-z0-9-]+\.amazonaws\.com/, `$1.${region}.amazonaws.com`)
         : u;
 
+    // OAuth/CLI connections keep the registry order: runtime.* (bare root) is
+    // what the real kiro-cli posts to, and it answers these tokens with 200 —
+    // captured, see docs/03-chat-request-spec.md. Forcing q.* first for them
+    // would mean the CLI-parity surface is never tried at all, which is the
+    // defect this branch fixes.
+    const isOAuthCli =
+      authMethod === "builder-id" || authMethod === "idc" ||
+      authMethod === "google" || authMethod === "github" ||
+      authMethod === "import";
+
     const amazon = baseUrls.filter((u) => u.includes("amazonaws.com")).map(regionalize);
     const others = baseUrls.filter((u) => !u.includes("amazonaws.com"));
+
+    if (isOAuthCli) {
+      return [...others, ...amazon];
+    }
+
+    // Non-OAuth (api_key / external_idp / unknown): keep the historical q.*-first
+    // ordering. These tokens authenticate against the Amazon surfaces, and a 400
+    // is terminal in BaseExecutor, so the working surface must be tried first.
     const q = amazon.filter((u) => u.includes("://q."));
     const remaining = amazon.filter((u) => !u.includes("://q."));
     return q.length > 0
