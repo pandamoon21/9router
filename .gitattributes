@@ -1,0 +1,18 @@
+* text=auto
+
+# Shell scripts must keep LF endings — CRLF breaks the shebang and `set -e` on
+# Git Bash / WSL / Linux. .ps1 is fine with either.
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# Windows launchers prefer CRLF
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Binary — never normalize, never diff
+*.tgz  binary
+*.png  binary
+*.ico  binary
+*.db   binary
+*.sqlite binary
