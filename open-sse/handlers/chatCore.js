@@ -197,7 +197,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     delete translatedBody._toolNameMap;
     customToolNames = translatedBody._customToolNames;
     delete translatedBody._customToolNames;
-    translatedBody.model = stripThinkingSuffix(upstreamModel);
+    // Most providers want `body.model`. Kiro does NOT: its wire body is exactly
+    // { conversationState, profileArn }, and the model travels inside
+    // conversationState.currentMessage.userInputMessage.modelId. Adding the field
+    // put a key on the wire that kiro-cli never sends (caught by the §6.4 live
+    // diff against a real CLI capture).
+    if (targetFormat !== FORMATS.KIRO) {
+      translatedBody.model = stripThinkingSuffix(upstreamModel);
+    }
     stripContinuityFields(translatedBody);
   }
 
