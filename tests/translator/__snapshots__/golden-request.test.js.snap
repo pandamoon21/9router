@@ -234,6 +234,8 @@ exports[`GOLDEN request: OpenAI → Gemini > full body (system/image/tool/tool_r
 exports[`GOLDEN request: OpenAI → Kiro > full body (image base64 + tool_result) 1`] = `
 {
   "conversationState": {
+    "agentContinuationId": "<UUID>",
+    "agentTaskType": "vibe",
     "chatTriggerType": "MANUAL",
     "currentMessage": {
       "userInputMessage": {
@@ -241,8 +243,12 @@ exports[`GOLDEN request: OpenAI → Kiro > full body (image base64 + tool_result
 
 continue",
         "modelId": "claude-sonnet-4.5",
-        "origin": "AI_EDITOR",
+        "origin": "KIRO_CLI",
         "userInputMessageContext": {
+          "envState": {
+            "currentWorkingDirectory": "<CWD>",
+            "operatingSystem": "windows",
+          },
           "toolResults": [
             {
               "content": [
@@ -281,7 +287,11 @@ continue",
     "history": [
       {
         "userInputMessage": {
-          "content": "You are helpful.
+          "content": "[Context: Current time is <TS>
+
+<instructions>
+You are helpful.
+</instructions>
 
 What's in this image?",
           "images": [
@@ -310,10 +320,6 @@ What's in this image?",
         },
       },
     ],
-  },
-  "inferenceConfig": {
-    "maxTokens": 32000,
-    "temperature": 0.7,
   },
   "profileArn": "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX",
 }
