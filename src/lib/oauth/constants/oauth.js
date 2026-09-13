@@ -114,6 +114,9 @@ export const GITLAB_CONFIG = { ...PROVIDER_OAUTH["gitlab"] };
 // CodeBuddy (Tencent) OAuth Configuration (Browser OAuth Polling Flow)
 export const CODEBUDDY_CONFIG = { ...PROVIDER_OAUTH["codebuddy-cn"] };
 
+// Fork (wyx0): standalone global CodeBuddy provider (www.codebuddy.ai)
+export const CODEBUDDY_GLOBAL_CONFIG = { ...PROVIDER_OAUTH["codebuddy"] };
+
 // CodeBuddy International — same shape as CN, .ai domain (mirror of codebuddy-cn).
 export const CODEBUDDY_INTL_CONFIG = { ...PROVIDER_OAUTH["codebuddy-intl"] };
 
@@ -231,7 +234,11 @@ export const PROVIDERS = {
   CLINE: "cline",
   CLINEPASS: "clinepass",
   GITLAB: "gitlab",
+  // Fork (wyx0): CODEBUDDY stays the CN id (upstream contract); the standalone
+  // global provider is registered under its own id.
   CODEBUDDY: "codebuddy-cn",
+  CODEBUDDY_CN: "codebuddy-cn",
+  CODEBUDDY_GLOBAL: "codebuddy",
   CODEBUDDY_INTL: "codebuddy-intl",
   KIMCHI: "kimchi",
   GROK_CLI: "grok-cli",

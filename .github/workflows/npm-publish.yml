@@ -1,0 +1,48 @@
+name: Build CLI & Publish to npm
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.github/workflows/**'
+      - '.gitignore'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install CLI dependencies
+        run: npm install
+        working-directory: ./cli
+
+      - name: Verify esbuild installation
+        run: node -e "console.log('esbuild:', require.resolve('esbuild'))"
+        working-directory: ./cli
+
+      - name: Build Next.js app
+        run: npm run build
+
+      - name: Build CLI package
+        run: node scripts/build-cli.js
+        working-directory: ./cli
+
+      - name: Publish to npm
+        run: cd cli && npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

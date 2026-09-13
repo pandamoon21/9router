@@ -26,6 +26,9 @@ const navItems = [
   { href: "/dashboard/quota", label: "Quota Tracker", icon: "data_usage" },
   { href: "/dashboard/token-saver", label: "Token Saver", icon: "savings" },
   // { href: "/dashboard/pxpipe", label: "PXPIPE", icon: "image" },
+  // Fork (wyx0): automation + MITM dashboards
+  { href: "/dashboard/mitm", label: "MITM", icon: "security" },
+  { href: "/dashboard/automation", label: "Automation", icon: "automation" },
   { href: "/dashboard/cli-tools", label: "CLI Tools", icon: "terminal" },
 ];
 

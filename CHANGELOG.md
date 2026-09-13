@@ -569,6 +569,64 @@
 - Param-support: handle strip rules without match/drop (#1960) — Joseph Yaksich
 - Translator: resolve custom provider prefix in debug endpoint (#1083) — hamsa0x7
 
+# Fork notes (wyx0 automation line)
+
+# v0.5.10-wyx0.7 (2026-07-04)
+
+## Bugfix
+- **Fix AutoClaw Z.ai authorize page**: setelah Google OAuth, Z.ai tampilkan halaman authorize ("AutoGLM would like to access your Z.ai account") dengan TOS checkbox + Continue button. Automation skip halaman ini karena guard `webOAuthCallback` match query param di URL Z.ai (`chat.z.ai/oauth/authorize?redirect_uri=...webOAuthCallback`). Guard disempitkan ke hostname `autoclaw.z.ai` saja + tambah `handleZaiAuthorizePage` untuk deteksi text + centang TOS + klik Continue.
+- **Fix locale zh-CN global**: `createFreshContext` hardcoded `locale: "zh-CN"` untuk semua bulk import. Z.ai serve UI berbeda (email-first, Google button icon-only) untuk zh-CN. Default diubah ke `en-US`, CodeBuddy CN phone pass `zh-CN` eksplisit.
+- **Fix Google button selector**: Z.ai UI zh-CN pakai `button.ButtonContinueWithGoogle` (icon-only, no text "Google"). Selector lama text-based tidak match. Tambah `button.ButtonContinueWithGoogle` + `button[class*="ContinueWithGoogle"]`.
+- **Fix React-controlled checkbox**: `checkFirstVisible` guarded check/click behind `isVisible()` — skip untuk input `opacity-0`. DOM fallback `input.checked = true` tidak trigger React state update. Fix: hapus visibility guard, tambah label click fallback, pakai native property descriptor setter.
+- **Fix token extraction race**: setelah redirect balik ke `autoclaw.z.ai`, loop masih jalan → `handleProviderOnboarding` klik dashboard buttons → interfere token storage. Guard loop skip semua action saat hostname `autoclaw.z.ai`.
+
+# v0.5.10-wyx0.6 (2026-07-02)
+
+## Sorotan
+- **Fix AutoClaw bulk login automation**: alur lama (API-based OAuth URL + network intercept) tidak match dengan web app terbaru. Diganti dengan web UI flow: buka `autoclaw.z.ai/web/` → click login → "Continue with Zai" → popup tab → Google login → Z.ai authorize → redirect balik → extract token dari localStorage.
+- **Fix deviceId mismatch**: sebelumnya 9Router generate random deviceId, tapi AutoClaw punya deviceId sendiri (di localStorage). Token refresh kirim deviceId salah → refresh fail. Sekarang deviceId dari localStorage AutoClaw dipass ke connection save.
+- **Popup tab handling**: "Continue with Zai" buka tab baru. Automation handle popup open dengan fallback same-tab. Token monitor poll SEMUA tab di context (500ms interval) supaya catch token regardless of which tab ends up with it.
+- **skipNavigation flag**: `runGoogleAccountAutomation` dapat param baru `skipNavigation` — kalau true, skip `page.goto(authUrl)` karena page sudah di Z.ai auth page (popup). Reusable untuk provider lain yang pakai multi-tab OAuth flow.
+
+# v0.5.9-wyx0.6 (2026-07-01)
+
+## Sorotan
+- **Provider baru: AutoClaw** (Z.ai GLM-5.2 + GLM-5-Turbo, free ~2300 pts/akun). Token import + bulk login automation via Google OAuth dengan token interception. Tracking saldo point per akun di dashboard automation.
+- **Fix KiroService.createSocialAuthorization**: method tidak pernah diimplement sejak awal, bikin bulk import Kiro gagal diam-diam.
+- **Fix Google "wrong password"**: loop re-submit email/password karena stale input setelah page transition. Navigation guard ditambah.
+- **Fix AutoClaw 500**: X-Request-Model header kirim upstream model id (bukan raw model name).
+- **zh-CN support**: 14 selector button Chinese (继续, 确认, 同意, dll) + markers untuk Google onboarding/consent/invalid credentials.
+- **Unified bulk-import routes**: kiro/qoder/codebuddy/codebuddy-cn sekarang pakai satu route `[provider]/bulk-import/*` (fix Next.js 16 params Promise bug).
+- **CodeBuddy CN content-filter**: stream peek 64KB + auto-retry dengan safe payload.
+- **CodeBuddy CN phone**: Keycloak selectors rewrite + 5sim phone format handling.
+- **Human-like typing**: variable delay per char (50-180ms), Ctrl+A+Delete clear, mouse movement sebelum klik.
+
+# v0.5.9-wyx0.5 (2026-06-23)
+
+## Sorotan
+- CodeBuddy biasa dan CodeBuddy CN sekarang dipisahkan lagi, jadi provider, jumlah akun, dan quota tracker bisa tampil dua-duanya.
+- Automation CodeBuddy CN via 5sim dibuat lebih siap dipakai: cek token/saldo, hitung estimasi akun yang bisa dibeli, beli nomor, OTP, generate API key, lalu simpan koneksi.
+- Proxy automation ditambah pilihan proxy pool dan round-robin, supaya worker bisa muter proxy dari pool yang sudah diset.
+- Runtime browser automation untuk Chromium/Camoufox dibuat lebih stabil di dev, CLI, build, dan package npm.
+- Fix blocker Windows CLI yang bikin automation gagal dengan error `File URL path must be absolute`.
+
+# v0.5.9-wyx0.1 (2026-06-23)
+
+## Sorotan
+- CodeBuddy biasa dipisahkan lagi dari CodeBuddy CN, jadi provider dan quota tracker bisa muncul dua-duanya.
+- Automation CodeBuddy CN via 5sim dibuat lebih jelas: cek token/saldo, beli nomor, tunggu OTP, generate API key, lalu simpan koneksi.
+- Tambahan opsi proxy pool dan round-robin proxy untuk automation login.
+- Runtime browser automation dibuat lebih tahan missing dependency Playwright/Camoufox di dev, CLI, build, dan package npm.
+- Perbaikan build CLI Windows saat folder lama terkunci, serta fix build Next karena import registry CodeBuddy dobel.
+
+# v0.5.8-wyx0.1 (2026-06-22)
+
+## Release Highlight
+- Optimisasi CodeBuddy agar stream panjang lebih stabil.
+- Tambahan awal GLM 2 API. Untuk saat ini fokusnya masih website/chat, belum untuk coding assistant.
+- Tambahan CodeBuddy CN dengan API key auth, setting API key, dan automation OTP via 5sim.
+- Sinkronisasi ke upstream 9Router v0.5.8.
+
 # v0.5.8 (2026-06-21)
 
 ## Features
@@ -817,3 +875,74 @@
 
 ## Breaking Changes
 - Tunnel public URL changed — old tunnel links no longer work, please reconnect to get the new URL
+
+# v0.4.44 (2026-05-15)
+
+## Features
+- Add Blackbox provider with `bb` alias (#1143)
+- Add Xiaomi token plan provider
+- Enhance model select modal UX + modal traffic lights (#1111)
+- Default Usage dashboard period to Today (#1141)
+
+## Fixes
+- Fix Cowork model selection and Windows CLI packaging (#1129)
+- Update provider name retrieval for compatibility provider (#1135)
+- Update JWT_SECRET handling
+
+# v0.4.41 (2026-05-14)
+
+## Features
+- Add jcode CLI tool integration with auto-configuration (#1047)
+- Redesign CLI Tools dashboard: grid layout (1/2/3 cols) + dedicated detail page per tool
+- Add drag-and-drop reordering for combo models (#1108)
+- Add Today period option to Usage & Analytics (#1063)
+- Add DeepSeek V4 Pro effort aliases (#950)
+
+## Fixes
+- fix(autostart): work on nvm + npm 9/10, actually register with launchctl (#1104, fixes #1082)
+- Fix Ollama usage not tracked/shown in UI (#1102)
+- fix(opencode): preserve DeepSeek reasoning content (#1099, fixes #1093)
+- Fix TUI input lag (replace enquirer with native readline, persistent raw mode)
+- fix(ui): show API key row actions on mobile (#1112)
+
+## Improvements
+- Sync DeepSeek TUI card style with other CLI tools (badges, layout, manual config modal)
+- Add official logos for Amp CLI, jcode, Qwen Code (replace generic icons)
+- Resize deepseek-tui icon 1024→128 with padding for visual consistency
+
+# v0.4.39 (2026-05-14)
+
+## Fixes
+- fix(docker): restore `/app/server.js` (v0.4.38 regression)
+
+# v0.4.38 (2026-05-13)
+
+## Features
+- Add DeepSeek TUI as CLI tool in dashboard (#1088)
+
+## Fixes
+- Fix broken Docker image in v0.4.36/v0.4.37 (#1096, #1097)
+
+## Improvements
+- Clean Docker tags + clearer pulls badge
+
+# v0.4.37 (2026-05-13)
+
+## Improvements
+- Security hardening — upgrade recommended
+
+# v0.4.36 (2026-05-13)
+
+## Features
+- Add MiniMax TTS provider support (#1043)
+- Docker images now published on both Docker Hub (`decolua/9router`) and GHCR — pull from your preferred registry
+
+## Improvements
+- Replace browser confirm dialogs with custom ConfirmModal (#1060)
+
+## Fixes
+- Fix Docker `Cannot find module 'next'` error in standalone build
+- Restore /app/server.js in Docker standalone build (#1064, #1067)
+- Fix CLI TUI menu arrow-key escape sequences leaking (^[[A^[[B)
+- Switch macOS/Linux tray to systray2 fork (fixes Kaspersky AV false-positive) (#1080)
+- Fix zoom controls contrast in topology view (#1066)

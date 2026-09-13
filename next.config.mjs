@@ -20,7 +20,19 @@ const nextConfig = {
   // letter). That throw happens at module scope, so every consumer of `open` dies on
   // import — including xAI/Grok token refresh, which loads the OAuth service that imports
   // it. Keeping it external preserves the real `import.meta.url` at runtime.
-  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite", "open"],
+  // `camoufox-js`, `impit`, `playwright*` are the browser-automation runtime used by the
+  // fork's OAuth bulk-import workers; they must resolve from the bundle's node_modules.
+  serverExternalPackages: [
+    "better-sqlite3",
+    "sql.js",
+    "node:sqlite",
+    "bun:sqlite",
+    "open",
+    "camoufox-js",
+    "impit",
+    "playwright",
+    "playwright-core",
+  ],
   turbopack: {
     root: tracingRoot
   },

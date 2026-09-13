@@ -9,7 +9,7 @@
  *   - device flow URL construction
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import crypto from "crypto";
 
 import { qoderEncodeBody } from "../../src/lib/qoder/encoding.js";
@@ -737,5 +737,76 @@ describe("rewriteQoderMessageAttachments", () => {
     expect(text).toContain(`name="file"`);
     expect(text).toContain("filename=\"image.png\"");
     expect(text).toContain(`--${boundary}`);
+  });
+});
+
+describe("buildQoderRequestBody plan gate", () => {
+  const { buildQoderRequestBody } = qoderExecutorInternals;
+
+  function makeCredentials(planTier) {
+    return {
+      accessToken: "dt-test-token",
+      email: "free@example.com",
+      displayName: "Free User",
+      providerSpecificData: {
+        userId: "user-id-1",
+        machineId: "machine-id-1",
+        planTier,
+      },
+    };
+  }
+
+  it("rejects models with enable:false before building a payload", async () => {
+    const modelsModule = await import("../../open-sse/services/qoderModels.js");
+    const spy = vi.spyOn(modelsModule, "getQoderModelConfig").mockResolvedValue({
+      key: "auto",
+      enable: false,
+      max_input_tokens: 180000,
+    });
+
+    let thrown;
+    try {
+      await buildQoderRequestBody({
+        model: "qoder/auto",
+        body: { messages: [{ role: "user", content: "hi" }] },
+        credentials: makeCredentials("PLAN_TIER_FREE"),
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      });
+    } catch (err) {
+      thrown = err;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown.status).toBe(403);
+    expect(thrown.code).toBe("model_not_enabled");
+    expect(thrown.message).toContain("PLAN_TIER_FREE");
+    expect(thrown.message).toContain("qmodel_latest");
+  });
+
+  it("accepts models with enable:true and produces a payload", async () => {
+    const modelsModule = await import("../../open-sse/services/qoderModels.js");
+    const spy = vi.spyOn(modelsModule, "getQoderModelConfig").mockResolvedValue({
+      key: "qmodel_latest",
+      enable: true,
+      is_reasoning: false,
+      max_input_tokens: 180000,
+    });
+
+    let result;
+    try {
+      result = await buildQoderRequestBody({
+        model: "qoder/qmodel_latest",
+        body: { messages: [{ role: "user", content: "hello world" }] },
+        credentials: makeCredentials("PLAN_TIER_FREE"),
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(result.qoderKey).toBe("qmodel_latest");
+    expect(result.payload.model_config.enable).toBe(true);
+    expect(result.payload.messages).toHaveLength(1);
+    expect(result.payload.messages[0].content).toBe("hello world");
   });
 });

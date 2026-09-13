@@ -22,6 +22,12 @@ const STREAM_MODE = {
   PASSTHROUGH: "passthrough" // No translation, normalize output, extract usage
 };
 
+function shouldStabilizeGLMResponses({ sourceFormat, targetFormat, model }) {
+  return sourceFormat === FORMATS.OPENAI_RESPONSES
+    && targetFormat === FORMATS.OPENAI
+    && String(model || "").toLowerCase().includes("glm");
+}
+
 /**
  * Create unified SSE transform stream
  * @param {object} options
@@ -60,7 +66,17 @@ export function createSSEStream(options = {}) {
   const decoder = new TextDecoder("utf-8", { fatal: false });
 
   const state = mode === STREAM_MODE.TRANSLATE
-    ? { ...initState(sourceFormat), provider, toolNameMap, customToolNames: new Set(customToolNames || []), model, sessionId: credentials?._clientSessionId || null }
+    ? {
+      ...initState(sourceFormat),
+      provider,
+      toolNameMap,
+      customToolNames: new Set(customToolNames || []),
+      model,
+      sessionId: credentials?._clientSessionId || null,
+      // Fork (wyx0): keep GLM Responses streams stable
+      suppressResponsesReasoning: shouldStabilizeGLMResponses({ sourceFormat, targetFormat, model }),
+      coalesceResponsesText: shouldStabilizeGLMResponses({ sourceFormat, targetFormat, model })
+    }
     : null;
 
   let totalContentLength = 0;

@@ -1035,5 +1035,85 @@
       "preserveCacheControl": true
     },
     "format": "openai"
+  },
+  "codebuddy": {
+    "baseUrl": "https://www.codebuddy.ai/v2/chat/completions",
+    "forceStream": true,
+    "headers": {
+      "User-Agent": "CLI/2.105.2 CodeBuddy/2.105.2",
+      "X-Product": "SaaS",
+      "X-App": "cli",
+      "X-Stainless-Runtime": "node",
+      "X-Stainless-Lang": "js",
+      "X-Stainless-Helper-Method": "stream",
+      "X-Stainless-Retry-Count": "0",
+      "X-IDE-Type": "CLI",
+      "X-IDE-Name": "CLI",
+      "X-IDE-Version": "2.105.2",
+      "X-Private-Data": "false",
+      "X-Requested-With": "XMLHttpRequest",
+      "X-Domain": "www.codebuddy.ai"
+    },
+    "auth": {
+      "combined": true,
+      "header": "Authorization",
+      "scheme": "bearer"
+    },
+    "usage": {
+      "url": "https://www.codebuddy.ai/v2/billing/meter/get-user-resource"
+    },
+    "format": "openai",
+    "tokenUrl": "https://www.codebuddy.ai/v2/plugin/auth/token"
+  },
+  "glm2api": {
+    "baseUrl": "http://127.0.0.1:8000/v1/responses",
+    "format": "openai-responses",
+    "auth": {
+      "combined": true,
+      "header": "Authorization",
+      "scheme": "bearer"
+    },
+    "transports": [
+      {
+        "format": "openai-responses",
+        "baseUrl": "http://127.0.0.1:8000/v1/responses",
+        "auth": {
+          "combined": true,
+          "header": "Authorization",
+          "scheme": "bearer"
+        }
+      },
+      {
+        "format": "openai",
+        "baseUrl": "http://127.0.0.1:8000/v1/chat/completions",
+        "auth": {
+          "combined": true,
+          "header": "Authorization",
+          "scheme": "bearer"
+        }
+      }
+    ]
+  },
+  "autoclaw": {
+    "baseUrl": "https://autoglm-api.autoglm.ai/autoclaw-proxy/proxy/autoclaw/chat/completions",
+    "format": "openai",
+    "forceStream": true,
+    "headers": {
+      "content-type": "application/json",
+      "origin": "https://autoclaw.z.ai",
+      "referer": "https://autoclaw.z.ai/",
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+      "x-product": "autoclaw",
+      "x-version": "1.10.0",
+      "x-tm": "web",
+      "x-channel": "official",
+      "x-client-type": "web",
+      "x-lang": "zh-CN"
+    },
+    "auth": {
+      "header": "X-Authorization",
+      "scheme": "bearer",
+      "combined": true
+    }
   }
 }

@@ -11,6 +11,8 @@ export { consumeCodexRateLimitResetCredit, getCodexRateLimitResetCredits };
 import { getKiroUsage } from "./usage/kiro.js";
 import { getMiniMaxUsage } from "./usage/minimax.js";
 import { getCodeBuddyCnUsage, getCodeBuddyIntlUsage } from "./usage/codebuddy-cn.js";
+// Fork (wyx0): standalone global CodeBuddy usage
+import { getCodeBuddyUsage } from "./usage/codebuddy.js";
 import { getGrokCliUsage } from "./usage/grok-cli.js";
 import { getKimiUsage } from "./usage/kimi.js";
 import { getDeepseekUsage } from "./usage/deepseek.js";
@@ -46,6 +48,8 @@ const USAGE_HANDLERS = {
     const resolved = await resolveQoderCredentials(c, c.proxyOptions).catch(() => null);
     return getQoderUsage(resolved?.accessToken || c.accessToken, c.proxyOptions);
   },
+  // Fork (wyx0): standalone global CodeBuddy usage
+  codebuddy: (c) => getCodeBuddyUsage(c.accessToken, c.providerSpecificData, c.proxyOptions, c.apiKey),
   iflow: (c) => getIflowUsage(c.accessToken),
   ollama: (c) => getOllamaUsage(c.apiKey, c.providerSpecificData, c.proxyOptions),
   glm: (c) => getGlmUsage(c.apiKey, c.provider, c.proxyOptions),

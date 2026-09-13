@@ -1,63 +1,163 @@
 import { NextResponse } from "next/server";
 import { KiroService } from "@/lib/oauth/services/kiro";
 import { createProviderConnection } from "@/models";
+import { getKiroBulkImportManager, parseKiroBulkAccounts } from "@/lib/oauth/services/kiroBulkImportManager";
+import { validateAndSaveKiroImportedToken } from "@/lib/oauth/services/kiroConnections";
 
 /**
  * POST /api/oauth/kiro/import
  * Import and validate refresh token from Kiro IDE.
  * For IDC (organization) tokens, accepts clientId/clientSecret/region so the
  * token can be refreshed via the regional AWS OIDC endpoint.
+ *
+ * Fork (wyx0) additions:
+ * - bulk refresh token import (refreshTokens[])
+ * - reserved account-mode bulk import (email|password) handled by the bulk manager
  */
 export async function POST(request) {
   try {
-    const { refreshToken, clientId, clientSecret, region, authMethod, profileArn } = await request.json();
+    const body = await request.json();
+    const mode = body?.mode === "account" ? "account" : "token";
 
-    if (!refreshToken || typeof refreshToken !== "string") {
+    if (mode === "account") {
+      const accounts = Array.isArray(body?.accounts) ? body.accounts : [];
+      const { parsed, invalidLines } = parseKiroBulkAccounts(accounts);
+      if (!parsed.length) {
+        return NextResponse.json(
+          { error: "At least one account entry is required" },
+          { status: 400 }
+        );
+      }
+
+      if (invalidLines.length > 0) {
+        return NextResponse.json(
+          {
+            error: "Invalid account format. Use one account per line: gmail@example.com|password",
+            invalidLines,
+          },
+          { status: 400 }
+        );
+      }
+
+      const manager = getKiroBulkImportManager();
+      const job = manager.startJob({
+        accounts,
+        concurrency: body?.concurrency,
+      });
+
+      return NextResponse.json({
+        success: true,
+        job,
+      });
+    }
+
+    const { clientId, clientSecret, region, profileArn } = body || {};
+    const singleRefreshToken = typeof body?.refreshToken === "string"
+      ? body.refreshToken.trim()
+      : "";
+    const bulkRefreshTokens = Array.isArray(body?.refreshTokens)
+      ? body.refreshTokens.map((token) => String(token || "").trim()).filter(Boolean)
+      : [];
+
+    // IDC (organization) tokens need clientId/clientSecret/region to refresh via
+    // the regional AWS OIDC endpoint, so they take the single-token service path.
+    const isIdc = !!(clientId && clientSecret);
+    if (isIdc) {
+      const refreshToken = singleRefreshToken || bulkRefreshTokens[0];
+      if (!refreshToken) {
+        return NextResponse.json(
+          { error: "Refresh token is required" },
+          { status: 400 }
+        );
+      }
+
+      const kiroService = new KiroService();
+      const providerSpecificData = {
+        clientId,
+        clientSecret,
+        region: region || "us-east-1",
+        authMethod: "idc",
+      };
+
+      const tokenData = await kiroService.refreshToken(refreshToken, providerSpecificData);
+      const email = kiroService.extractEmailFromJWT(tokenData.accessToken);
+
+      const connection = await createProviderConnection({
+        provider: "kiro",
+        authType: "oauth",
+        accessToken: tokenData.accessToken,
+        refreshToken: tokenData.refreshToken || refreshToken,
+        expiresAt: new Date(Date.now() + (tokenData.expiresIn || 3600) * 1000).toISOString(),
+        email: email || null,
+        providerSpecificData: {
+          profileArn: profileArn || tokenData.profileArn || null,
+          authMethod: "idc",
+          provider: "Enterprise",
+          clientId,
+          clientSecret,
+          region: region || "us-east-1",
+        },
+        testStatus: "active",
+      });
+
+      return NextResponse.json({
+        success: true,
+        connection: {
+          id: connection.id,
+          provider: connection.provider,
+          email: connection.email,
+        },
+      });
+    }
+
+    const refreshTokens = bulkRefreshTokens.length > 0
+      ? bulkRefreshTokens
+      : (singleRefreshToken ? [singleRefreshToken] : []);
+
+    if (!refreshTokens.length) {
       return NextResponse.json(
         { error: "Refresh token is required" },
         { status: 400 }
       );
     }
 
-    const kiroService = new KiroService();
-    const isIdc = !!(clientId && clientSecret);
+    const importedConnections = [];
+    const failed = [];
 
-    // For IDC tokens, refresh via the regional OIDC endpoint with client credentials.
-    // For social/builder-id tokens, use the standard social refresh endpoint.
-    const providerSpecificData = isIdc
-      ? { clientId, clientSecret, region: region || "us-east-1", authMethod: "idc" }
-      : {};
+    for (let index = 0; index < refreshTokens.length; index += 1) {
+      const refreshToken = refreshTokens[index];
 
-    const tokenData = await kiroService.refreshToken(refreshToken.trim(), providerSpecificData);
+      try {
+        const { connection } = await validateAndSaveKiroImportedToken(refreshToken);
+        importedConnections.push(connection);
+      } catch (error) {
+        failed.push({
+          line: bulkRefreshTokens.length > 0 ? index + 1 : 1,
+          error: error.message,
+        });
+      }
+    }
 
-    const email = kiroService.extractEmailFromJWT(tokenData.accessToken);
-    const resolvedAuthMethod = isIdc ? "idc" : "imported";
-    const providerLabel = isIdc ? "Enterprise" : "Imported";
-    const resolvedProfileArn = profileArn || tokenData.profileArn || null;
+    if (!importedConnections.length) {
+      return NextResponse.json(
+        { error: failed[0]?.error || "Import failed", failed },
+        { status: 400 }
+      );
+    }
 
-    const connection = await createProviderConnection({
-      provider: "kiro",
-      authType: "oauth",
-      accessToken: tokenData.accessToken,
-      refreshToken: tokenData.refreshToken || refreshToken.trim(),
-      expiresAt: new Date(Date.now() + (tokenData.expiresIn || 3600) * 1000).toISOString(),
-      email: email || null,
-      providerSpecificData: {
-        profileArn: resolvedProfileArn,
-        authMethod: resolvedAuthMethod,
-        provider: providerLabel,
-        ...(isIdc ? { clientId, clientSecret, region: region || "us-east-1" } : {}),
-      },
-      testStatus: "active",
-    });
+    if (bulkRefreshTokens.length > 0) {
+      return NextResponse.json({
+        success: true,
+        imported: importedConnections.length,
+        failed: failed.length,
+        connections: importedConnections,
+        failures: failed,
+      });
+    }
 
     return NextResponse.json({
       success: true,
-      connection: {
-        id: connection.id,
-        provider: connection.provider,
-        email: connection.email,
-      },
+      connection: importedConnections[0],
     });
   } catch (error) {
     console.log("Kiro import token error:", error);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
 
@@ -23,6 +23,7 @@ export default function ProviderIcon({
 }) {
   const effectiveSrc = resolveSrc(src, providerId);
   const [errored, setErrored] = useState(false);
+  const [imageSrc, setImageSrc] = useState(src);
 
   if (!effectiveSrc || errored) {
     return (

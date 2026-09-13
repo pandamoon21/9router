@@ -115,3 +115,39 @@ tests/unit/translator-request-normalization.test.js :: request normalization tra
 tests/unit/windsurf-executor.test.js :: WindsurfExecutor class PROVIDERS.windsurf baseUrl is the chat endpoint (registry in sync)
 tests/unit/windsurf-executor.test.js :: WindsurfExecutor class buildUrl returns the GetChatMessage endpoint
 tests/unit/windsurf-executor.test.js :: WindsurfExecutor class constructor wires config from PROVIDERS.windsurf
+
+# Fork (wyx0) — pre-existing failures carried over from the fork branch's own
+# test suite (fail on the wyx0 parent too). Not caused by the upstream sync.
+tests/unit/bulkImportBrowserEngine.test.js :: launchBulkImportBrowser — chromium engine default engine is chromium
+tests/unit/bulkImportBrowserEngine.test.js :: launchBulkImportBrowser — chromium engine happy path with proxyUrl: proxy option passed to chromium.launch
+tests/unit/bulkImportBrowserEngine.test.js :: launchBulkImportBrowser — chromium engine happy path: import playwright succeeds → chromium.launch called with headless:true
+tests/unit/bulkImportBrowserEngine.test.js :: launchBulkImportBrowser — chromium engine installPlaywrightOnly is NOT called when playwright import succeeds
+tests/unit/bulkImportBrowserEngine.test.js :: resolveRuntimeModuleDir falls back when Next standalone exposes a virtual file URL on Windows
+tests/unit/camoufoxRuntime.installOnly.test.js :: installCamoufoxOnly happy path: npm install ok + binary fetch ok → { ok: true }
+tests/unit/camoufoxRuntime.installOnly.test.js :: installCamoufoxOnly npm install fails with disk space error → { ok: false, reason includes disk/space }
+tests/unit/camoufoxRuntime.installOnly.test.js :: installCamoufoxOnly npm install fails with network error → { ok: false, reason includes network/internet/registry }
+tests/unit/camoufoxRuntime.installOnly.test.js :: installCamoufoxOnly npm install fails with permission error → { ok: false, reason includes 'permission' }
+tests/unit/codebuddy-bulk-import-manager.test.js :: CodeBuddyBulkImportManager does not mark CodeBuddy OAuth success as final success when API key creation fails
+tests/unit/codebuddy-cn-5sim-quote-route.test.js :: CodeBuddy CN 5sim quote route tries the next selected proxy before reporting a transient 5sim failure
+tests/unit/codebuddy-cn-phone-import.test.js :: FiveSimClient retries transient 5sim buy activation gateway errors before succeeding
+tests/unit/codebuddy-cn-phone-import.test.js :: FiveSimClient retries transient 5sim check gateway errors five times before the next poll
+tests/unit/codebuddy-cn-phone-import.test.js :: FiveSimClient retries transient 5sim profile gateway errors before failing readiness
+tests/unit/connection-status.test.js :: connection status classifier does not mark transient rate limits or network errors as terminal
+tests/unit/connection-status.test.js :: connection status classifier keeps healthy and disabled connections distinct
+tests/unit/connection-status.test.js :: connection status classifier marks auth, exhausted, and banned states as terminal
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes can request the latest recent terminal job snapshot
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes cancels a known job
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes does not treat recoverable scope as recent terminal history
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes opens a manual session for a blocked worker
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes rejects malformed account lines on start route
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes returns 404 for unknown status job
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes returns recoverable false when no latest job exists
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes returns the latest bulk import job snapshot
+tests/unit/kiro-bulk-import-routes.test.js :: Kiro bulk import routes starts a bulk import job and returns the job payload
+tests/unit/kiroGoogleAutomation.email.test.js :: fillInputResilient falls back to type() when fill() did not actually set the value (React-controlled input)
+tests/unit/kiroGoogleAutomation.email.test.js :: fillInputResilient returns false when both fill() and type() fail to set value
+tests/unit/kiroGoogleAutomation.email.test.js :: fillInputResilient uses fill() and accepts when inputValue matches
+tests/unit/openai-to-kiro.test.js :: openaiToKiroRequest thinking exposure policy allows explicit opt-in for exposing Kiro reasoning
+tests/unit/openai-to-kiro.test.js :: openaiToKiroRequest thinking exposure policy does not expose Kiro reasoning to clients by default
+tests/unit/openai-to-kiro.test.js :: openaiToKiroRequest thinking exposure policy lets an explicit disabled thinking config override model suffixes and reasoning_effort
+tests/unit/openai-to-kiro.test.js :: openaiToKiroRequest tool interaction without client-provided tools should trim very large tool descriptions for Kiro payload limits

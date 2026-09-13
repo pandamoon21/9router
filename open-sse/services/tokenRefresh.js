@@ -19,6 +19,7 @@ import {
   refreshWindsurfToken,
   classifyOAuthRefreshError,
 } from "./tokenRefresh/providers.js";
+import { refreshAutoclawToken } from "./tokenRefresh/autoclaw.js";
 
 // Re-export all provider refresh functions (preserves public API for all consumers)
 export {
@@ -146,6 +147,8 @@ const REFRESH_HANDLERS = {
   gcli: (c, log) => refreshXaiToken(c.refreshToken, log),
   "codebuddy-cn": (c, log) => refreshCodebuddyToken(c, log),
   "codebuddy-intl": (c, log) => refreshCodebuddyIntlToken(c, log),
+  // Fork (wyx0): standalone global CodeBuddy provider (www.codebuddy.ai)
+  codebuddy: (c, log) => refreshCodebuddyToken(c.refreshToken, log, "codebuddy"),
   trae: (c, log) => refreshTraeToken(c.refreshToken, c, log),
   cline: (c, log) => refreshClineToken(c.refreshToken, log),
   // ClinePass shares Cline's WorkOS auth endpoints, so the same refresh works.
@@ -156,7 +159,8 @@ const REFRESH_HANDLERS = {
   kimi: (c, log) => refreshKimiToken(c.refreshToken, c, log),
   "kimi-coding": (c, log) => refreshKimiToken(c.refreshToken, c, log),
   vertex: vertexRefreshHandler,
-  "vertex-partner": vertexRefreshHandler
+  "vertex-partner": vertexRefreshHandler,
+  autoclaw: (c, log) => refreshAutoclawToken(c, log),
 };
 
 export async function getAccessToken(provider, credentials, log) {

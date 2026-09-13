@@ -123,6 +123,11 @@ import p119 from "./selfhosted-embedding.js";
 import p120 from "./fish-audio.js";
 import p121 from "./alitp-intl.js";
 import p122 from "./xquik.js";
+// Fork (wyx0) providers: standalone CodeBuddy (global), glm2api, AutoClaw.
+import p124 from "./codebuddy.js";
+import p125 from "./glm2api.js";
+import p126 from "./autoclaw.js";
+
 export default [
   p0,
   p1,
@@ -246,4 +251,8 @@ export default [
   p120,
   p121,
   p122,
+  // Fork (wyx0)
+  p124,
+  p125,
+  p126,
 ];

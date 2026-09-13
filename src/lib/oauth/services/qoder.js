@@ -175,6 +175,23 @@ export class QoderService {
     }
   }
 
+  async fetchUserPlan(accessToken) {
+    try {
+      const response = await fetchWithTimeout("https://qoder.com/api/v1/me/userplan", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          "User-Agent": "Go-http-client/2.0",
+        },
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Convert the upstream's expiry hint into a Unix-millisecond timestamp.
    * Accepts:

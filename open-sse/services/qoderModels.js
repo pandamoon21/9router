@@ -251,8 +251,10 @@ async function fetchQoderCatalogRaw(credentials, signal, proxyOptions = null) {
     const key = entry.key;
     if (!key) continue;
 
-    // Always cache the config — chat needs model_config even for UI-hidden
-    // models (enable:false). Upstream still accepts chat for these keys.
+    // Cache the config for every key. The executor reads the cached entry
+    // to enforce a 403-with-pricing pre-flight check on enable:false models —
+    // upstream returns code:112 + a pricing URL when a free-plan account
+    // tries one of those keys, so refusing locally gives a clearer error.
     rawConfigs.set(key, entry);
     if (entry.enable === false) continue;
 

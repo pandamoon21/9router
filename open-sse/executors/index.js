@@ -24,6 +24,8 @@ import { CodeBuddyIntlExecutor } from "./codebuddy-intl.js";
 import TraeExecutor from "./trae.js";
 import ZedExecutor from "./zed.js";
 import WindsurfExecutor from "./windsurf.js";
+import { CodeBuddyGlobalExecutor } from "./codebuddy.js";
+import { AutoclawExecutor } from "./autoclaw.js";
 import { DefaultExecutor } from "./default.js";
 import { DevinCliExecutor } from "./devin-cli.js";
 
@@ -60,6 +62,8 @@ const executors = {
   zed: new ZedExecutor(),
   windsurf: new WindsurfExecutor(),
   "devin-cli": new DevinCliExecutor(),
+  codebuddy: new CodeBuddyGlobalExecutor(),
+  autoclaw: new AutoclawExecutor(),
 };
 
 const defaultCache = new Map();
@@ -103,3 +107,5 @@ export { default as TraeExecutor } from "./trae.js";
 export { default as ZedExecutor } from "./zed.js";
 export { default as WindsurfExecutor } from "./windsurf.js";
 export { DevinCliExecutor } from "./devin-cli.js";
+export { CodeBuddyGlobalExecutor } from "./codebuddy.js";
+export { AutoclawExecutor } from "./autoclaw.js";

@@ -18,6 +18,7 @@ import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDeta
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
+import { shouldApplyCavemanPrompt, shouldDisableCodeBuddyCnReasoning } from "./chatCore/cavemanGuard.js";
 import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { injectCaveman } from "../rtk/caveman.js";
@@ -108,8 +109,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     if (mode === "on" && !body.thinking) {
       console.log("Injecting provider-level thinking config override: on");
       body = { ...body, thinking: { type: "enabled", budget_tokens: 10000 } };
-    } else if (mode === "off" && !body.thinking) {
+    } else if (mode === "off") {
       body = { ...body, thinking: { type: "disabled" } };
+      delete body.reasoning_effort;
+      if (body.reasoning && typeof body.reasoning === "object") {
+        body.reasoning = { ...body.reasoning, effort: "none" };
+      }
     } else if (!body.reasoning_effort) {
       body = { ...body, reasoning_effort: mode };
     }
@@ -254,6 +259,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Per-request opt-out: client can bypass all token savers via header
   const tokenSaverEnabled = clientRawRequest?.headers?.[TOKEN_SAVER_HEADER]?.toLowerCase() !== "off";
 
+  // Fork (wyx0): let providers that reject reasoning params (or hit their content
+  // filter when reasoning is present) have it stripped for specific models.
+  if (shouldDisableCodeBuddyCnReasoning({ sourceFormat, provider, model })) {
+    translatedBody.reasoning_effort = "none";
+    delete translatedBody.reasoning_summary;
+    log?.debug?.("REASONING", `disabled for ${provider}/${model} on ${sourceFormat}`);
+  }
+
   // RTK: compress tool_result content
   const rtkStats = compressMessages(translatedBody, tokenSaverEnabled && rtkEnabled);
   const rtkLine = formatRtkLog(rtkStats);
@@ -276,8 +289,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Caveman: inject terse-style system prompt
   if (tokenSaverEnabled && cavemanEnabled && cavemanLevel) {
-    injectCaveman(translatedBody, finalFormat, cavemanLevel);
-    xf.push(`CAVEMAN:${cavemanLevel}`);
+    if (shouldApplyCavemanPrompt({ sourceFormat, provider, model })) {
+      injectCaveman(translatedBody, finalFormat, cavemanLevel);
+      xf.push(`CAVEMAN:${cavemanLevel}`);
+      log?.debug?.("CAVEMAN", `${cavemanLevel} | ${finalFormat}`);
+    } else {
+      log?.debug?.("CAVEMAN", `skipped for ${provider}/${model} on ${sourceFormat}`);
+    }
   }
 
   // Ponytail: inject lazy-senior-dev system prompt

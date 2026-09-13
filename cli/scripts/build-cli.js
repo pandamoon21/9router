@@ -3,12 +3,14 @@
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
+const { cleanPathForRebuild } = require("./safeRemove");
 
 const cliDir = path.resolve(__dirname, "..");
 const appDir = path.resolve(cliDir, "..");
 const rootDir = path.resolve(appDir, "..");
 const cliAppDir = process.env.NINEROUTER_CLI_APP_DIR || path.join(cliDir, "app");
 const buildHomeDir = path.join(cliDir, ".build-home");
+const staleAppDir = path.join(cliDir, ".app-trash");
 const buildDistDirName = ".next-cli-build";
 const buildDistDir = path.join(appDir, buildDistDirName);
 
@@ -190,10 +192,19 @@ function buildCliPackage() {
     process.exit(1);
   }
 
-  // Step 2: Clean old app/cli/app if exists
+  // Step 2: Clean old app/cli/app if exists.
+  // Windows keeps handles on freshly-built files, so a hard delete can fail with
+  // EBUSY/EPERM. cleanPathForRebuild retries, then moves the dir aside to .app-trash.
   console.log("2️⃣  Cleaning old app/cli/app...");
-  if (fs.existsSync(cliAppDir)) {
-    fs.rmSync(cliAppDir, { recursive: true, force: true });
+  try {
+    cleanPathForRebuild(cliAppDir, {
+      staleDir: staleAppDir,
+      label: "old CLI app",
+      processHint: "Close any running 9router / node / npm process using cli/app, then rerun the build.",
+    });
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
   }
   console.log("✅ Cleaned\n");
 

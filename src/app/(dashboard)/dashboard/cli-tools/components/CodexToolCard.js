@@ -179,6 +179,7 @@ model_provider = "9router"
 name = "9Router"
 base_url = "${getEffectiveBaseUrl()}"
 wire_api = "responses"
+requires_openai_auth = true
 
 [model_providers.9router.http_headers]
 Authorization = "Bearer ${keyToUse}"
