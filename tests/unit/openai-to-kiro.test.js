@@ -11,7 +11,16 @@ import { openaiToKiroRequest } from "../../open-sse/translator/request/openai-to
 
 const contentOf = (result) =>
   result.conversationState.currentMessage.userInputMessage.content;
-const systemPromptOf = (result) => result.systemPrompt || "";
+// The Kiro translator stopped emitting a top-level `systemPrompt` in v0.5.59
+// (the gateway rejects the field with 400 REQUEST_BODY_INVALID). The prompt now
+// rides in the first user turn's content, so read it from there.
+const systemPromptOf = (result) => {
+  const history = result?.conversationState?.history;
+  const firstUser = Array.isArray(history)
+    ? history.find((turn) => turn?.userInputMessage)?.userInputMessage
+    : null;
+  return firstUser?.content ?? result?.conversationState?.currentMessage?.userInputMessage?.content ?? "";
+};
 
 describe("openaiToKiroRequest", () => {
   describe("basic message conversion", () => {
@@ -25,7 +34,8 @@ describe("openaiToKiroRequest", () => {
       const currentMsg = result.conversationState.currentMessage;
       expect(currentMsg.userInputMessage.content).toContain("Hello");
       expect(currentMsg.userInputMessage.modelId).toBe("claude-sonnet-4.6");
-      expect(currentMsg.userInputMessage.origin).toBe("AI_EDITOR");
+      // kiro-cli sends origin: KIRO_CLI; the old AI_EDITOR value was the IDE's.
+      expect(currentMsg.userInputMessage.origin).toBe("KIRO_CLI");
     });
 
     it("should not include images field when no images are present", () => {
@@ -173,8 +183,11 @@ describe("openaiToKiroRequest", () => {
       const result = openaiToKiroRequest("claude-sonnet-4.6", body, true, {});
       const cs = result.conversationState;
 
-      // No structured tool content anywhere
-      expect(cs.currentMessage.userInputMessage.userInputMessageContext).toBeUndefined();
+      // No structured tool content anywhere. envState is always present now
+      // (kiro-cli sends it on every turn); the tool arrays must not be.
+      const ctx = cs.currentMessage.userInputMessage.userInputMessageContext;
+      expect(ctx?.tools).toBeUndefined();
+      expect(ctx?.toolResults).toBeUndefined();
       const allJson = JSON.stringify(cs);
       expect(allJson).not.toContain("toolUses");
       expect(allJson).not.toContain("toolResults");
@@ -542,10 +555,12 @@ describe("openaiToKiroRequest", () => {
       const result = openaiToKiroRequest("claude-sonnet-4.6", body, true, {});
 
       expect(systemPromptOf(result)).toContain("<max_thinking_length>32000</max_thinking_length>");
-      expect(result.additionalModelRequestFields?.output_config?.effort).toBe("high");
+      // claude-sonnet-4.6's captured enum is [low, medium, high, max] — `max` is
+      // a real wire value there, so it is forwarded rather than clamped to high.
+      expect(result.additionalModelRequestFields?.output_config?.effort).toBe("max");
     });
 
-    it("clamps OpenAI Responses reasoning.effort xhigh to max_thinking_length 32000", () => {
+    it("drops xhigh on claude-sonnet-4.6, whose captured enum stops at max", () => {
       const body = {
         reasoning: { effort: "xhigh" },
         messages: [{ role: "user", content: "Think extra deeply" }]
@@ -554,7 +569,7 @@ describe("openaiToKiroRequest", () => {
       const result = openaiToKiroRequest("claude-sonnet-4.6", body, true, {});
 
       expect(systemPromptOf(result)).toContain("<max_thinking_length>32000</max_thinking_length>");
-      expect(result.additionalModelRequestFields?.output_config?.effort).toBe("high");
+      expect(result.additionalModelRequestFields).toBeUndefined();
     });
 
     it("uses Claude thinking.budget_tokens as max_thinking_length", () => {
@@ -578,7 +593,7 @@ describe("openaiToKiroRequest", () => {
       expect(systemPromptOf(result)).toContain("<max_thinking_length>16000</max_thinking_length>");
     });
 
-    it("keeps top-level systemPrompt stable across turns", () => {
+    it("keeps the system prompt stable across turns while the time context moves", () => {
       const first = openaiToKiroRequest(
         "claude-sonnet-4.6-thinking",
         { messages: [{ role: "user", content: "first" }] },
@@ -592,8 +607,15 @@ describe("openaiToKiroRequest", () => {
         {}
       );
 
-      expect(first.systemPrompt).toBe(second.systemPrompt);
-      expect(first.systemPrompt).not.toContain("Current time");
+      // No top-level systemPrompt: the gateway rejects the field outright.
+      expect(first.systemPrompt).toBeUndefined();
+      expect(second.systemPrompt).toBeUndefined();
+      // The thinking prefix is identical across turns...
+      const thinkingPrefix = "<thinking_mode>enabled</thinking_mode>";
+      expect(systemPromptOf(first)).toContain(thinkingPrefix);
+      expect(systemPromptOf(second)).toContain(thinkingPrefix);
+      // ...while the injected time context is per-turn, in the user content.
+      expect(systemPromptOf(first)).toContain("Current time");
       expect(first.conversationState.currentMessage.userInputMessage.content).toContain("Current time");
     });
 
@@ -616,7 +638,10 @@ describe("openaiToKiroRequest", () => {
       );
 
       expect(second.conversationState.conversationId).toBe("hermes-session-openai-replay");
-      expect(second.conversationState).not.toHaveProperty("agentContinuationId");
+      // kiro-cli always carries agentContinuationId on the wire, so its presence
+      // is now part of the contract (it was absent before the parity work).
+      expect(typeof second.conversationState.agentContinuationId).toBe("string");
+      expect(second.conversationState.agentTaskType).toBe("vibe");
       expect(second.conversationState.history[0].userInputMessage.content).toBe(
         first.conversationState.currentMessage.userInputMessage.content
       );
