@@ -352,24 +352,25 @@ export class KiroExecutor extends BaseExecutor {
         ? u.replace(/([a-z]+)\.[a-z0-9-]+\.amazonaws\.com/, `$1.${region}.amazonaws.com`)
         : u;
 
-    // OAuth/CLI connections keep the registry order: runtime.* (bare root) is
-    // what the real kiro-cli posts to, and it answers these tokens with 200 —
-    // captured, see docs/03-chat-request-spec.md. Forcing q.* first for them
-    // would mean the CLI-parity surface is never tried at all, which is the
-    // defect this branch fixes.
-    const isOAuthCli =
-      authMethod === "builder-id" || authMethod === "idc" ||
+    // Only the sign-ins whose token the kiro.dev gateway actually accepts may
+    // reach runtime.* first: the real kiro-cli posts there and gets 200
+    // (captured, docs/03-chat-request-spec.md). This list is NOT the same as the
+    // header-level OAuth list in buildHeaders(): `idc` uses the modern body/header
+    // shape but its SSO access token is rejected by the gateway with 403, so it
+    // must stay on the Amazon surfaces (see the idc note above).
+    const runtimeFirst =
+      authMethod === "builder-id" ||
       authMethod === "google" || authMethod === "github" ||
       authMethod === "import";
 
     const amazon = baseUrls.filter((u) => u.includes("amazonaws.com")).map(regionalize);
     const others = baseUrls.filter((u) => !u.includes("amazonaws.com"));
 
-    if (isOAuthCli) {
+    if (runtimeFirst) {
       return [...others, ...amazon];
     }
 
-    // Non-OAuth (api_key / external_idp / unknown): keep the historical q.*-first
+    // api_key / idc / external_idp / unknown keep the historical q.*-first
     // ordering. These tokens authenticate against the Amazon surfaces, and a 400
     // is terminal in BaseExecutor, so the working surface must be tried first.
     const q = amazon.filter((u) => u.includes("://q."));
