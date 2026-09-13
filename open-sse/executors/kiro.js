@@ -398,6 +398,53 @@ export class KiroExecutor extends BaseExecutor {
   }
 
   /**
+   * Kiro rejects a request with a plain JSON body (NOT an EventStream frame):
+   *
+   *   HTTP 400
+   *   x-amzn-RequestId: d4129996-f4f5-4a5f-977c-8cbe70b12164
+   *   {"__type": "com.amazon.kiro.runtimeservice#ValidationException",
+   *    "message": "Invalid model ID. Please select a different model to continue.",
+   *    "reason": "INVALID_MODEL_ID"}
+   *
+   * The default parser only lifts `message`, so `reason` and the correlation id
+   * are lost. `reason` is the machine-readable class the retry taxonomy keys on,
+   * and the request id is what support asks for, so surface both in the message.
+   * Captured format: docs/08-eventstream-and-tools.md §4.4.
+   */
+  parseError(response, bodyText) {
+    const base = super.parseError(response, bodyText);
+    let parsed;
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch {
+      return base;
+    }
+    if (!parsed || typeof parsed !== "object") return base;
+
+    const requestId =
+      response?.headers?.get?.("x-amzn-requestid") ||
+      response?.headers?.get?.("x-amzn-RequestId") ||
+      null;
+
+    const parts = [];
+    if (typeof parsed.message === "string" && parsed.message) parts.push(parsed.message);
+    if (typeof parsed.reason === "string" && parsed.reason) parts.push(`reason=${parsed.reason}`);
+    if (requestId) parts.push(`request_id=${requestId}`);
+
+    // __type's trailing segment is the exception class, e.g. "ValidationException".
+    const exceptionType =
+      typeof parsed.__type === "string" ? parsed.__type.split("#").pop() : null;
+    if (exceptionType) parts.push(`(${exceptionType})`);
+
+    return {
+      status: base.status,
+      message: parts.length > 0 ? parts.join(" ") : base.message,
+      kiroReason: typeof parsed.reason === "string" ? parsed.reason : null,
+      requestId,
+    };
+  }
+
+  /**
    * Kiro execute — delegate to BaseExecutor for endpoint fallback + retry, then
    * transform the binary AWS EventStream into OpenAI-shaped SSE on success.
    *
