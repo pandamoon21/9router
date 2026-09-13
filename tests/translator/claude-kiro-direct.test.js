@@ -26,8 +26,17 @@ describe("Claude → Kiro (direct route)", () => {
 
     expect(first.conversationState.conversationId).toBe("hermes-session-123-claude-replay");
     expect(second.conversationState.conversationId).toBe("hermes-session-123-claude-replay");
-    expect(first.conversationState).not.toHaveProperty("agentContinuationId");
-    expect(second.conversationState).not.toHaveProperty("agentTaskType");
+    // kiro-cli parity: the CLI always sends these, with agentContinuationId fresh
+    // per turn (never reused as conversationId). See docs/03-chat-request-spec.md.
+    expect(first.conversationState.agentTaskType).toBe("vibe");
+    expect(second.conversationState.agentTaskType).toBe("vibe");
+    expect(first.conversationState.agentContinuationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first.conversationState.agentContinuationId).not.toBe(
+      second.conversationState.agentContinuationId
+    );
+    expect(first.conversationState.agentContinuationId).not.toBe(
+      first.conversationState.conversationId
+    );
     expect(second.conversationState.history[0].userInputMessage.content).toBe(
       first.conversationState.currentMessage.userInputMessage.content
     );
