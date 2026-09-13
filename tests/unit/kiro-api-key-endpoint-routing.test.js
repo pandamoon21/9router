@@ -33,20 +33,23 @@ describe("Kiro auth-aware endpoint routing", () => {
     ]);
   });
 
-  it("routes external IdP through Amazon Q first", () => {
+  // external_idp binds via TokenType: EXTERNAL_IDP on the CodeWhisperer
+  // surface, so it keeps the registry order rather than the api_key q.* hop.
+  it("routes external IdP through CodeWhisperer first", () => {
     expect(executor.getOrderedBaseUrls(credentials("external_idp"))).toEqual([
-      Q,
       CODEWHISPERER,
+      Q,
       RUNTIME,
     ]);
   });
 
   // idc uses the modern header/body shape but its SSO access token is rejected
-  // by the kiro.dev gateway with 403, so it stays on the Amazon surfaces.
-  it("regionalizes AWS endpoints for IDC with Q first", () => {
+  // by the kiro.dev gateway with 403, so it stays on the Amazon surfaces — in
+  // registry order (CodeWhisperer before q), not the api_key q.* hop.
+  it("regionalizes AWS endpoints for IDC, CodeWhisperer first", () => {
     expect(executor.getOrderedBaseUrls(credentials("idc", "eu-west-1"))).toEqual([
-      "https://q.eu-west-1.amazonaws.com/generateAssistantResponse",
       "https://codewhisperer.eu-west-1.amazonaws.com/generateAssistantResponse",
+      "https://q.eu-west-1.amazonaws.com/generateAssistantResponse",
       RUNTIME,
     ]);
   });

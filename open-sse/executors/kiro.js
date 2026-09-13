@@ -370,14 +370,19 @@ export class KiroExecutor extends BaseExecutor {
       return [...others, ...amazon];
     }
 
-    // api_key / idc / external_idp / unknown keep the historical q.*-first
-    // ordering. These tokens authenticate against the Amazon surfaces, and a 400
-    // is terminal in BaseExecutor, so the working surface must be tried first.
-    const q = amazon.filter((u) => u.includes("://q."));
-    const remaining = amazon.filter((u) => !u.includes("://q."));
-    return q.length > 0
-      ? [...q, ...remaining, ...others]
-      : [...amazon, ...others];
+    // q.* first, but ONLY for api_key (16cb40fd): the codewhisperer.* endpoint
+    // authenticates an API key yet rejects the same valid payload with
+    // REQUEST_BODY_INVALID, and a 400 is terminal, so the working surface must
+    // lead or it is never tried. external_idp and idc bind to the CodeWhisperer
+    // surface itself (TokenType: EXTERNAL_IDP / SSO token), so they keep the
+    // registry order and must not be reordered onto q.*.
+    if (authMethod === "api_key") {
+      const q = amazon.filter((u) => u.includes("://q."));
+      const remaining = amazon.filter((u) => !u.includes("://q."));
+      if (q.length > 0) return [...q, ...remaining, ...others];
+    }
+
+    return [...amazon, ...others];
   }
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
