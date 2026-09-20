@@ -187,6 +187,51 @@ function Assert-Checkout {
     }
 }
 
+function Initialize-CliDeps {
+    param([string] $Dir)
+
+    # cli/node_modules is never installed by any script: `cli:pack` runs
+    # `npm --prefix cli run pack:cli`, and esbuild lives in cli/devDependencies.
+    # On a fresh clone the build dies at the MITM step with
+    # "Cannot find module 'esbuild'".
+    $esbuild = Join-Path $Dir 'cli/node_modules/.bin/esbuild.cmd'
+
+    if (Test-Path -LiteralPath $esbuild) { return }
+
+    Write-Step 'Installing cli/ dependencies (esbuild is needed for the MITM build)'
+
+    Push-Location $Dir
+    try {
+        & npm --prefix cli install --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { Fail 'npm --prefix cli install failed' }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Initialize-Lockfile {
+    param([string] $Dir)
+
+    # package-lock.json is gitignored (upstream decolua, fb5be37e), so a fresh
+    # clone has none. Without it the Docker build re-solves the whole dependency
+    # tree on every package.json change — measured at 354s of a 734s build.
+    $lock = Join-Path $Dir 'package-lock.json'
+
+    if (Test-Path -LiteralPath $lock) { return }
+
+    Write-Step 'Generating package-lock.json (first run only)'
+
+    Push-Location $Dir
+    try {
+        & npm install --package-lock-only --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { Write-Warn 'could not generate a lockfile - the Docker build will solve from scratch' }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Get-ForkVersion {
     param([string] $Dir)
 
@@ -347,6 +392,9 @@ try {
     Assert-Checkout -Dir $sourceDir
 
     Write-Step "Source: $sourceDir (v$(Get-ForkVersion -Dir $sourceDir))"
+
+    Initialize-CliDeps -Dir $sourceDir
+    Initialize-Lockfile -Dir $sourceDir
 
     if ($BuildOnly) {
         $only = Build-Package -Dir $sourceDir

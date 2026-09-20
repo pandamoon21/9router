@@ -95,6 +95,33 @@ assert_checkout() {
     [ -f "$dir/cli/package.json" ] || fail "No cli/package.json in $dir - not a 9router checkout"
 }
 
+# package-lock.json is gitignored (upstream decolua, fb5be37e), so a fresh clone
+# has none. Without it the Docker build re-solves the whole dependency tree on
+# every package.json change — measured at 354s of a 734s build on a 2-core box.
+# Generate it once here; it is a local artifact and stays out of git.
+ensure_lockfile() {
+    local dir="$1"
+
+    [ -f "$dir/package-lock.json" ] && return 0
+
+    step 'Generating package-lock.json (first run only)'
+    ( cd "$dir" && npm install --package-lock-only --no-audit --no-fund ) >&2 ||
+        warn 'could not generate a lockfile - the Docker build will solve from scratch'
+}
+
+# cli/node_modules is never installed by any script: `cli:pack` runs
+# `npm --prefix cli run pack:cli`, and esbuild lives in cli/devDependencies. On a
+# fresh clone the build dies at the MITM step with "Cannot find module 'esbuild'".
+ensure_cli_deps() {
+    local dir="$1"
+
+    [ -x "$dir/cli/node_modules/.bin/esbuild" ] && return 0
+
+    step 'Installing cli/ dependencies (esbuild is needed for the MITM build)'
+    ( cd "$dir" && npm --prefix cli install --no-audit --no-fund ) >&2 ||
+        fail 'npm --prefix cli install failed'
+}
+
 fork_version() {
     local dir="$1"
 
@@ -297,6 +324,9 @@ main() {
     assert_checkout "$SOURCE_DIR"
 
     step "Source: $SOURCE_DIR (v$(fork_version "$SOURCE_DIR"))"
+
+    ensure_cli_deps "$SOURCE_DIR"
+    ensure_lockfile "$SOURCE_DIR"
 
     if [ "$BUILD_ONLY" -eq 1 ]; then
         local only

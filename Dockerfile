@@ -7,14 +7,29 @@ RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
 
 FROM base AS builder
 
-RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
+# No C++ toolchain. The only native dep is better-sqlite3, and it is an
+# optionalDependency that npm resolves to a prebuilt musl binary — a measured
+# build shows zero cc1plus/node-gyp invocations. db/driver.js falls through
+# better-sqlite3 → node:sqlite (built in since Node 22.5) → sql.js anyway, so
+# the compiler earns nothing. Dropping it also drops the `apk upgrade` that
+# used to run the whole Alpine distro forward in both stages.
 
+# package-lock.json is gitignored (upstream decolua made it so, fb5be37e), so a
+# plain clone has none. `npm ci` needs one, and the old bare `npm install`
+# re-solved the whole dependency tree whenever package.json changed — measured
+# at 354s of a 734s build. install.sh / .ps1 write one next to package.json;
+# this layer writes one in the image if the build context lacks it.
 COPY package.json ./
-RUN npm install --registry=https://registry.npmmirror.com
+RUN if [ ! -f package-lock.json ]; then npm install --package-lock-only --registry=https://registry.npmmirror.com; fi
 
+# Copy the rest of the source, then the lockfile last: the heavy `npm ci` layer
+# below then only busts when the lockfile itself changes, not on every source
+# edit.
 COPY . ./
+COPY package-lock.json* ./
+
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+RUN npm ci --registry=https://registry.npmmirror.com && npm run build
 
 FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
@@ -49,7 +64,7 @@ RUN mkdir -p /app/data && chown -R node:node /app && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 
 # Fix permissions at runtime (handles mounted volumes)
-RUN apk --no-cache upgrade && apk --no-cache add su-exec && \
+RUN apk --no-cache add su-exec && \
   printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
