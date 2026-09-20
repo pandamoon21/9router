@@ -27,6 +27,18 @@ export class CodeBuddyExecutor extends DefaultExecutor {
     // legitimate user system prompts untouched. content may be a string or typed
     // blocks ([{type:"text",text}]) depending on the incoming client format, so
     // flatten before matching and preserve the original shape on replacement.
+    //
+    // DISABLED 2026-09-20 (fork). Both arms were measured against the live
+    // upstream and neither survives contact:
+    //   - Tencent accepts long system prompts: 25,716 chars delivered intact on
+    //     glm-5.2 / deepseek-v4-pro / deepseek-v4-flash / deepseek-v4.1-flash
+    //     (HTTP 200, ~6034 in_tokens), and on 10 more cbcn models in a later
+    //     sweep (14/14 HTTP 200, 13 followed the persona).
+    //   - The >2000-char arm was silently discarding every long prompt our own
+    //     users set, with no error and no log.
+    // Keep the identity-marker regex exported so it can be restored if Tencent
+    // ever changes its mind — set CODEBUDDY_CN_AGENT_FILTER=1 to re-enable.
+    const FILTER_ENABLED = process.env.CODEBUDDY_CN_AGENT_FILTER === "1";
     const NEUTRAL_PROMPT = "You are a helpful AI assistant that helps with software engineering tasks.";
     const AGENT_PATTERN = /you are claude code|claude.?code.+official.+cli|anthropic.+official.+cli|anxthxropic.+official.+cli|you are (?:cursor|windsurf|cline|aider|continue|copilot|cody)|you are an? (?:ai )?(?:coding |code )?agent|cc_entrypoint\s*=\s*(?:cli|vscode|jetbrains|gui)|claude.?code.+issues|give feedback.+claude.?code|you are .{0,30}(?:powerful )?ai agent|orchestration capabilities|OhMyOpenCode|<agent-identity>|<Role>|<Behavior_Instructions>/i;
     const flatten = (content) =>
@@ -35,12 +47,12 @@ export class CodeBuddyExecutor extends DefaultExecutor {
         : Array.isArray(content)
           ? content.map((b) => (b && typeof b.text === "string" ? b.text : "")).join("\n")
           : "";
-    if (Array.isArray(transformed.messages)) {
+    if (FILTER_ENABLED && Array.isArray(transformed.messages)) {
       transformed.messages = transformed.messages.map((message) => {
         if (!message || message.role !== "system") return message;
         const text = flatten(message.content);
         if (!text) return message;
-        if (text.length > 2000 || AGENT_PATTERN.test(text)) {
+        if (AGENT_PATTERN.test(text)) {
           return typeof message.content === "string"
             ? { ...message, content: NEUTRAL_PROMPT }
             : { ...message, content: [{ type: "text", text: NEUTRAL_PROMPT }] };
