@@ -133,21 +133,27 @@ export default function Sidebar({ onClose }) {
           {updateInfo && (
             <div className="flex flex-col gap-1.5 rounded p-1 -m-1">
               <span className="text-xs font-semibold text-green-600 dark:text-amber-500">
-                ↑ New version available: v{updateInfo.latestVersion}
+                ↑ Upstream v{updateInfo.latestVersion} available
+              </span>
+              <span className="text-[10px] leading-snug text-text-muted">
+                This install is a fork. The notice tracks the upstream npm
+                package, so it means &ldquo;merge upstream&rdquo; — not
+                &ldquo;upgrade&rdquo;. Installing it replaces the fork and drops
+                every fork-only change. Re-run the fork installer instead.
               </span>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowUpdateModal(true)}
-                  className="px-2 py-1 rounded bg-green-600 hover:bg-green-700 dark:bg-amber-500 dark:hover:bg-amber-600 text-white text-[11px] font-semibold transition-colors cursor-pointer"
+                  className="px-2 py-1 rounded bg-surface-2 hover:bg-surface-3 text-text-main text-[11px] font-semibold transition-colors cursor-pointer"
                 >
-                  Update now
+                  Details
                 </button>
                 <button
                   onClick={() => copy(INSTALL_CMD)}
                   title="Copy install command"
                   className="flex-1 text-left hover:opacity-80 transition-opacity cursor-pointer min-w-0"
                 >
-                  <code className="block text-[10px] text-green-600/80 dark:text-amber-400/70 font-mono truncate">
+                  <code className="block text-[10px] text-text-muted font-mono truncate">
                     {copied ? "✓ copied!" : INSTALL_CMD}
                   </code>
                 </button>
@@ -410,7 +416,7 @@ function ManualUpdatePanel({ latestVersion, installCmd, copied, onCopyAndShutdow
           <span className="material-symbols-outlined text-[24px]">content_copy</span>
         </div>
         <div>
-          <h2 className="text-lg font-semibold">Update 9Router{latestVersion ? ` to v${latestVersion}` : ""}</h2>
+          <h2 className="text-lg font-semibold">Upstream v{latestVersion} available</h2>
           <p className="text-xs text-white/60">
             {isDisconnected
               ? "Server stopped. Paste the command into a terminal to install."
@@ -421,14 +427,28 @@ function ManualUpdatePanel({ latestVersion, installCmd, copied, onCopyAndShutdow
         </div>
       </div>
 
+      <p className="text-xs text-amber-400/90 mb-4 leading-snug">
+        This install is a <strong>fork</strong>. The command below installs the
+        upstream npm build and <strong>replaces the fork</strong> — every
+        fork-only change (kiro-cli parity, CodeBuddy fingerprint, installer
+        patches) is dropped. To pick up an upstream release, merge it in the
+        fork checkout and re-run <code className="px-1 rounded bg-white/10">./install.sh</code>
+        {" / "}
+        <code className="px-1 rounded bg-white/10">.\\install.ps1</code>.
+      </p>
+
       <p className="text-sm text-white/80 mb-2">Install command:</p>
       <div className="w-full px-3 py-2 rounded bg-white/5 mb-4">
         <code className="text-xs font-mono text-amber-400 break-all">{installCmd}</code>
       </div>
 
       <ol className="text-xs text-white/70 space-y-1 list-decimal list-inside mb-4">
-        <li>Click <strong>Copy & Shutdown</strong> below.</li>
-        <li>Paste the command into your terminal and press Enter.</li>
+        <li>Click <strong>Copy &amp; Shutdown</strong> below.</li>
+        <li>
+          Paste the command into your terminal and press Enter.
+          <span className="text-amber-400/90"> This installs upstream, not the fork.</span>
+        </li>
+        <li>To keep the fork: cancel, merge upstream in the checkout, then re-run the fork installer.</li>
         <li>Run <code className="px-1 rounded bg-white/10 text-green-400">9router</code> again after install.</li>
       </ol>
 
@@ -441,8 +461,8 @@ function ManualUpdatePanel({ latestVersion, installCmd, copied, onCopyAndShutdow
           <Button variant="secondary" onClick={onCancel} disabled={isCountingDown}>
             Cancel
           </Button>
-          <Button variant="primary" fullWidth onClick={onCopyAndShutdown} disabled={isCountingDown}>
-            {copied ? "✓ Copied — shutting down..." : isCountingDown ? `Shutting down in ${countdown}s` : "Copy & Shutdown"}
+          <Button variant="secondary" onClick={onCopyAndShutdown} disabled={isCountingDown} className="flex-1">
+            {copied ? "✓ Copied upstream cmd" : isCountingDown ? `Shutting down in ${countdown}s` : "Copy upstream command"}
           </Button>
         </div>
       )}

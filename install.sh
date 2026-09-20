@@ -5,6 +5,8 @@
 #   ./install.sh ~/src/9router            build from another checkout
 #   ./install.sh owner/repo               clone https://github.com/owner/repo
 #   ./install.sh https://host/repo.git    clone it
+#   ./install.sh --build-only             build the tarball and stop
+#   ./install.sh --keep-running           do not stop running instances
 #
 # The published `9router` npm package is the launcher plus a *prebuilt* copy of
 # the dashboard. Neither `npm install -g 9router` nor `npm update -g 9router`
@@ -20,6 +22,8 @@ DEFAULT_REPO_URL="https://github.com/pandamoon21/9router.git"
 
 TEMP_CLONE_ROOT=""
 SOURCE_DIR=""
+BUILD_ONLY=0
+KEEP_RUNNING=0
 
 # ---- output helpers --------------------------------------------------------
 
@@ -99,6 +103,58 @@ fork_version() {
         "$dir/cli/package.json" 2>/dev/null || printf '?'
 }
 
+# ---- stale-build detection -------------------------------------------------
+
+newest_source_mtime() {
+    local dir="$1"
+
+    # Only the trees that actually feed the bundle. mtimes survive the copy into
+    # cli/app, so a tarball built before the last source edit is stale.
+    #
+    # Portable: `stat -f` is BSD/macOS, `stat -c` is GNU; `find -newer` is not
+    # usable here because we need a timestamp, not a comparison.
+    local path m newest=0
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        if m="$(stat -c %Y "$path" 2>/dev/null)"; then
+            :
+        elif m="$(stat -f %m "$path" 2>/dev/null)"; then
+            :
+        else
+            continue
+        fi
+        [ "$m" -gt "$newest" ] && newest="$m"
+    done < <(find "$dir/src" "$dir/open-sse" "$dir/cli" \
+                 -type f -not -path '*/node_modules/*' 2>/dev/null)
+
+    printf '%s' "$newest"
+}
+
+assert_fresh_tarball() {
+    local tgz="$1" dir="$2"
+    local newest_src tgz_m
+
+    newest_src="$(newest_source_mtime "$dir")"
+    [ "$newest_src" -gt 0 ] || return 0
+
+    if tgz_m="$(stat -c %Y "$tgz" 2>/dev/null)"; then
+        :
+    else
+        tgz_m="$(stat -f %m "$tgz" 2>/dev/null || printf 0)"
+    fi
+
+    if [ "$tgz_m" -lt "$newest_src" ]; then
+        fail "Build produced a tarball older than the source tree.
+
+    tarball: $(basename "$tgz")  $tgz_m
+    source:  $newest_src
+
+That means npm pack reused an existing package or the build did not run.
+Delete the stale tarball and re-run:
+    rm $dir/9router-*.tgz"
+    fi
+}
+
 # ---- running instance ------------------------------------------------------
 
 stop_running_instance() {
@@ -148,10 +204,13 @@ build_package() {
     ( cd "$dir" && npm run cli:pack ) >&2 || fail 'npm run cli:pack failed'
 
     # Newest tarball - output is on stdout so the caller can capture it.
+    # Nothing else in this function may write to stdout or it joins the path.
     local tgz
     tgz="$(ls -t "$dir"/9router-*.tgz 2>/dev/null | head -1)"
 
     [ -n "$tgz" ] || fail 'Build produced no 9router-*.tgz'
+
+    assert_fresh_tarball "$tgz" "$dir"
 
     local size
     size="$(du -h "$tgz" | cut -f1)"
@@ -164,9 +223,16 @@ build_package() {
 install_globally() {
     local tgz="$1"
 
-    step 'Installing globally (--force: npm refuses same/lower version without it)'
+    step 'Removing the previous global install'
 
-    npm install -g "$tgz" --force >&2 || fail 'Global npm installation failed'
+    # A dirty tree here is how a reinstall silently keeps stale files: npm
+    # overwrites what it packages but never deletes what the last version left
+    # behind. Clear it so what lands is exactly the tarball.
+    npm uninstall -g 9router >/dev/null 2>&1 || warn 'uninstall reported an error - continuing'
+
+    step 'Installing globally'
+
+    npm install -g "$tgz" >&2 || fail 'Global npm installation failed'
 }
 
 init_sqlite_runtime() {
@@ -211,16 +277,40 @@ EOF
 # ---- main ------------------------------------------------------------------
 
 main() {
+    local arg=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --build-only)   BUILD_ONLY=1 ;;
+            --keep-running) KEEP_RUNNING=1 ;;
+            -*)             fail "unknown option: $1" ;;
+            *)              arg="$1" ;;
+        esac
+        shift
+    done
+
     assert_tool node
     assert_tool npm
     assert_node_version
 
-    SOURCE_DIR="$(resolve_source_dir "${1:-}")"
+    SOURCE_DIR="$(resolve_source_dir "$arg")"
     assert_checkout "$SOURCE_DIR"
 
     step "Source: $SOURCE_DIR (v$(fork_version "$SOURCE_DIR"))"
 
-    stop_running_instance
+    if [ "$BUILD_ONLY" -eq 1 ]; then
+        local only
+        only="$(build_package "$SOURCE_DIR")"
+        step "Build-only: $only"
+        printf '\n    Nothing was stopped or installed.\n\n' >&2
+        return
+    fi
+
+    if [ "$KEEP_RUNNING" -eq 1 ]; then
+        step 'Leaving running 9router instances alone (--keep-running)'
+    else
+        stop_running_instance
+    fi
 
     local tgz
     tgz="$(build_package "$SOURCE_DIR")"

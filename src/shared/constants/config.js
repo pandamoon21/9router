@@ -8,12 +8,21 @@ export const APP_CONFIG = {
 };
 
 // GitHub configuration
+//
+// Pointed at this fork, not decolua: the dashboard fetched the upstream
+// changelog, so the fork section in our CHANGELOG.md never appeared in the
+// modal and the upstream entries showed as if they were ours.
 export const GITHUB_CONFIG = {
-  changelogUrl: "https://raw.githubusercontent.com/decolua/9router/refs/heads/master/CHANGELOG.md",
+  changelogUrl: "https://raw.githubusercontent.com/pandamoon21/9router/refs/heads/master/CHANGELOG.md",
   donateUrl: "https://9router.com/api/donate",
 };
 
 // Updater configuration
+//
+// `npmPackageName` stays "9router": that is how the sidebar notices a new
+// upstream release, and the fork is not published to npm. But the registry
+// build is upstream, so the shown command must not be mistaken for an upgrade
+// path on a fork install — see the warning in Sidebar.js.
 export const UPDATER_CONFIG = {
   npmPackageName: "9router",
   installCmd: "npm i -g 9router",

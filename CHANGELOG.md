@@ -1,3 +1,71 @@
+# Fork changes (pandamoon21)
+
+Everything below this section is upstream `decolua/9router`. This section tracks
+what this fork adds on top. Latest upstream merged: **v0.5.81** (2026-09-20).
+
+To install a fork build, use `.\install.ps1` (Windows) or `./install.sh` — plain
+`npm install -g 9router` / `npm update -g 9router` fetches the upstream registry
+build and silently discards everything listed here.
+
+## 2026-09-20 — CodeBuddy CN: system prompt pass-through
+
+- **CodeBuddy CN**: stop replacing long system prompts. The executor rewrote any
+  `role:"system"` message over 2000 chars — or matching an agent-identity regex —
+  with a neutral one. Measured against the live upstream, that rewrite had no
+  basis: a 25,716-char persona prompt was delivered intact to 14 `cbcn` models
+  (HTTP 200, 5830–6254 in_tokens), 11 of which adopted it; the one refusal came
+  from a model, not the server. The length arm silently discarded every long
+  system prompt a user set, with no error and no log. The identity arm is kept
+  behind `CODEBUDDY_CN_AGENT_FILTER=1` (off by default). First regression
+  coverage for this logic; per-model results in
+  `docs/codebuddy-cn-system-prompt-results.md`.
+- **Installers**: repair the tarball handoff — `$tgz.FullName` threw because
+  `npm run cli:pack` stdout was joining the function's return value (the caller
+  received a 298-element `Object[]`). Refuse a leftover tarball older than the
+  source tree. Add `-BuildOnly` (build and stop, touch nothing running) and
+  `-KeepRunning`. Replace `--force` with a clean `npm uninstall -g` first, so
+  the installed tree matches the tarball exactly.
+
+## 2026-09-14 — Kiro: kiro-cli wire parity
+
+Sixteen commits aligning the Kiro path with what the real `kiro-cli` client
+sends, captured on the wire rather than inferred:
+
+- **Fingerprint**: send the kiro-cli 2.21.4 Rust client fingerprint in registry
+  headers; align OAuth inference headers with kiro-cli while leaving other auth
+  paths intact.
+- **Request body**: match the kiro-cli body shape in both translators; post to
+  the runtime host root instead of forcing `q.*` for OAuth methods; scope the
+  `q.*` hop to `api_key` only; keep `idc` and `external_idp` on the Amazon
+  surfaces; stop `chatCore` adding a top-level `model`.
+- **Effort contract**: read it from the live model catalog and match the
+  captured per-model effort enums instead of collapsing levels.
+- **Errors & events**: surface the machine-readable reason and request id on
+  upstream errors; drop invented event types and tolerate unknown ones.
+- **Claude**: map assistant `reasoning_content` to a thinking block.
+
+Tests assert the wire shape against a real CLI capture, not the pre-parity
+omissions.
+
+## 2026-09-06 — CodeBuddy: response format enforcement
+
+- Inject the `response_format` schema through a user message, since the upstream
+  path drops the field. Applies to both the CN and INT executors.
+
+## 2026-08-20 — CodeBuddy: CLI device fingerprint and telemetry
+
+- Replicate the official CLI's device fingerprint and telemetry so requests look
+  like the real client, reducing key bans: `open-sse/services/codebuddy/identity.js`,
+  `telemetry.js`, and the executor wiring.
+
+## 2026-09-14 — Fork installers
+
+- `install.ps1` (Windows) and `install.sh` (Linux/macOS): build from a fork and
+  install the resulting tarball globally. Added because neither
+  `npm install -g 9router` nor `npm update -g 9router` can point at a fork.
+
+---
+
 # v0.5.81 (2026-09-18)
 
 ## Features
