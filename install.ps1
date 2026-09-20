@@ -16,10 +16,19 @@
       - owner/repo             clone https://github.com/owner/repo
       - a full git URL         clone it
 
+.PARAMETER BuildOnly
+    Build the tarball and stop. Nothing is stopped, nothing is installed.
+    Use this to check that a checkout still builds before committing to a
+    full reinstall.
+
+.PARAMETER KeepRunning
+    Do not stop running 9router instances before installing.
+
 .EXAMPLE
     .\install.ps1
     .\install.ps1 C:\src\9router
     .\install.ps1 pandamoon21/9router
+    .\install.ps1 -BuildOnly
 
 .NOTES
     Never use `npm update -g 9router` on a fork install - it silently replaces
@@ -28,7 +37,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [string] $Source
+    [string] $Source,
+
+    [switch] $BuildOnly,
+
+    [switch] $KeepRunning
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,6 +76,56 @@ function Assert-NodeVersion {
     $major = [int] $version.Split('.')[0]
 
     if ($major -lt 18) { Fail "Node >= 18 required (have $version)" }
+}
+
+# ---- stale-build detection -------------------------------------------------
+
+function Get-NewestSourceWriteTime {
+    param([string] $Dir)
+
+    # Only the trees that actually feed the bundle. mtimes survive the copy
+    # into cli/app, so a tarball built before the last source edit is stale.
+    $roots = @('src', 'open-sse', 'cli') | ForEach-Object { Join-Path $Dir $_ }
+
+    $newest = $null
+
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+
+        Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' } |
+            ForEach-Object {
+                if (-not $newest -or $_.LastWriteTimeUtc -gt $newest) { $newest = $_.LastWriteTimeUtc }
+            }
+    }
+
+    # Wrap so the DateTime survives as one value: a bare `return $newest` inside
+    # a loop-emitting function leaks every intermediate value into the caller.
+    return ,$newest
+}
+
+function Test-FreshTarball {
+    param([System.IO.FileInfo] $Tgz, [string] $Dir)
+
+    # The installer picks the newest 9router-*.tgz. If one is left over from an
+    # earlier build and the source has moved on since, that stale file gets
+    # installed and the run looks successful. Refuse instead.
+    $newestSource = Get-NewestSourceWriteTime -Dir $Dir
+
+    if (-not $newestSource) { return }
+
+    if ($Tgz.LastWriteTimeUtc -lt $newestSource) {
+        Fail @"
+Build produced a tarball older than the source tree.
+
+    tarball: $($Tgz.Name)  $($Tgz.LastWriteTimeUtc.ToString('u'))
+    source:  $($newestSource.ToString('u'))
+
+That means npm pack reused an existing package or the build did not run.
+Delete the stale tarball and re-run:
+    Remove-Item (Join-Path '$Dir' '9router-*.tgz')
+"@
+    }
 }
 
 # ---- source resolution -----------------------------------------------------
@@ -176,7 +239,11 @@ function Build-Package {
     Push-Location $Dir
 
     try {
-        & npm run cli:pack
+        # Out-Null: `npm run cli:pack` writes its notice/tarball listing to
+        # stdout, and anything a function emits joins its return value. Without
+        # this the caller receives a 298-element Object[] instead of the FileInfo
+        # and `$tgz.FullName` throws.
+        & npm run cli:pack | Out-Null
         if ($LASTEXITCODE -ne 0) { Fail 'npm run cli:pack failed' }
     }
     finally {
@@ -189,17 +256,30 @@ function Build-Package {
 
     if (-not $tgz) { Fail 'Build produced no 9router-*.tgz' }
 
+    Test-FreshTarball -Tgz $tgz -Dir $Dir
+
     Write-Step "Built $($tgz.Name) ($([math]::Round($tgz.Length / 1MB, 2)) MB)"
 
-    return $tgz
+    # -NoEnumerate: a bare `return $file` unrolls the FileInfo into its members
+    # and the caller loses .FullName. Wrap it so the object survives the return.
+    return ,$tgz
 }
 
 function Install-Globally {
     param([System.IO.FileInfo] $Tgz)
 
-    Write-Step 'Installing globally (--force: npm refuses same/lower version without it)'
+    Write-Step 'Removing the previous global install'
 
-    & npm install -g $Tgz.FullName --force
+    # A dirty tree here is how a reinstall silently keeps stale files: npm
+    # overwrites what it packages but never deletes what the last version left
+    # behind. Clear it so what lands is exactly the tarball.
+    & npm uninstall -g 9router *> $null
+
+    if ($LASTEXITCODE -ne 0) { Write-Warn 'uninstall reported an error - continuing' }
+
+    Write-Step 'Installing globally'
+
+    & npm install -g $Tgz.FullName
 
     if ($LASTEXITCODE -ne 0) { Fail 'Global npm installation failed' }
 }
@@ -268,7 +348,21 @@ try {
 
     Write-Step "Source: $sourceDir (v$(Get-ForkVersion -Dir $sourceDir))"
 
-    Stop-RunningInstance
+    if ($BuildOnly) {
+        $only = Build-Package -Dir $sourceDir
+        Write-Step "Build-only: $($only.FullName)"
+        Write-Host ''
+        Write-Host '    Nothing was stopped or installed.' -ForegroundColor Gray
+        Write-Host ''
+        return
+    }
+
+    if ($KeepRunning) {
+        Write-Step 'Leaving running 9router instances alone (-KeepRunning)'
+    }
+    else {
+        Stop-RunningInstance
+    }
 
     $tgz = Build-Package -Dir $sourceDir
     Install-Globally -Tgz $tgz
