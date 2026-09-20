@@ -105,3 +105,11 @@ debug.log
 # Upstream dropped this snapshot (2203cd8f) but the test still calls
 # toMatchSnapshot(), so vitest rewrites it on every run — keep it out of git.
 tests/translator/__snapshots__/golden-url-header.test.js.snap
+
+# CodeBuddy CN investigation scratch — probe scripts, their captured output, and
+# the Python/tooling caches they leave behind. Kept locally, never committed.
+_probe_*.py
+_patch_codebuddy_filter.py
+_probe_out/
+__pycache__/
+.omc/
