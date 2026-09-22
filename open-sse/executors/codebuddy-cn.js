@@ -57,9 +57,17 @@ export class CodeBuddyExecutor extends DefaultExecutor {
     //     sweep (14/14 HTTP 200, 13 followed the persona).
     //   - The >2000-char arm was silently discarding every long prompt our own
     //     users set, with no error and no log.
-    // Keep the identity-marker regex exported so it can be restored if Tencent
-    // ever changes its mind — set CODEBUDDY_CN_AGENT_FILTER=1 to re-enable.
-    const FILTER_ENABLED = process.env.CODEBUDDY_CN_AGENT_FILTER === "1";
+    // 2026-09-22 UPDATE: the length arm stays off, but the identity-marker arm
+    // is now **default-on** — proven by bisect against
+    // `copilot.tencent.com/v2/chat/completions` on 2026-09-22:
+    // system prompt "You are Claude Code, Anthropic's official CLI for Claude."
+    // returns 11128 (WAF "unapproved channel"); the same prompt with generic
+    // wording returns 200. Aegis scans system-prompt content for brand
+    // impersonation strings, and Claude Code sends that exact frase on every
+    // request — so any user routing Claude Code → cbcn hits a hard 400 without
+    // this rewrite. Escape hatch preserved: set CODEBUDDY_CN_AGENT_FILTER=0 to
+    // disable (e.g. probing raw upstream behavior).
+    const FILTER_ENABLED = process.env.CODEBUDDY_CN_AGENT_FILTER !== "0";
     const NEUTRAL_PROMPT = "You are a helpful AI assistant that helps with software engineering tasks.";
     const AGENT_PATTERN = /you are claude code|claude.?code.+official.+cli|anthropic.+official.+cli|anxthxropic.+official.+cli|you are (?:cursor|windsurf|cline|aider|continue|copilot|cody)|you are an? (?:ai )?(?:coding |code )?agent|cc_entrypoint\s*=\s*(?:cli|vscode|jetbrains|gui)|claude.?code.+issues|give feedback.+claude.?code|you are .{0,30}(?:powerful )?ai agent|orchestration capabilities|OhMyOpenCode|<agent-identity>|<Role>|<Behavior_Instructions>/i;
     const flatten = (content) =>

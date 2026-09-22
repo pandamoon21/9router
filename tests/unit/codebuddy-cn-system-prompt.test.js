@@ -2,13 +2,16 @@
 //
 // History: `9138c993` added a rewrite that replaced any system message with
 // NEUTRAL_PROMPT when it was longer than 2000 chars OR matched an agent-identity
-// regex. The stated reason was "Tencent's content filter rejects agent system
-// prompts" — that claim was measured on 2026-09-20 and did not reproduce:
-//   - a 25,716-char persona prompt was delivered intact to 14 cbcn models
-//     (HTTP 200, 5830-6254 in_tokens), 13 of which followed the persona;
-//   - the >2000 arm was silently discarding every long prompt a user set,
-//     with no error and no log.
-// The filter is now off by default and gated behind CODEBUDDY_CN_AGENT_FILTER.
+// regex. The length arm was measured wrong (a 25,716-char benign persona
+// prompt was delivered intact to 14 cbcn models, HTTP 200) and stays off.
+// The identity-marker arm turned out to be needed after all: a 2026-09-22
+// bisect through the local gateway proved that a system prompt containing
+// "You are Claude Code, Anthropic's official CLI for Claude." returns 11128
+// ("The request was blocked by security policy") on `copilot.tencent.com`,
+// while the same prompt with generic wording returns 200. Aegis scans system
+// prompts for brand-impersonation strings, and Claude Code sends that exact
+// phrase — so the identity-marker arm is now **default-on**. Escape hatch:
+// CODEBUDDY_CN_AGENT_FILTER=0 disables it.
 import { describe, it, expect, afterEach } from "vitest";
 import { CodeBuddyExecutor } from "../../open-sse/executors/codebuddy-cn.js";
 
@@ -18,21 +21,23 @@ const MARKER = "You are Claude Code, Anthropic's official CLI for coding.";
 const body = (content) => ({ messages: [{ role: "system", content }, { role: "user", content: "hi" }] });
 const systemOf = (out) => out.messages[0].content;
 
-describe("CodeBuddyExecutor system prompt is passed through by default", () => {
+describe("CodeBuddyExecutor: identity marker replaced by default, length arm stays off", () => {
   const exec = new CodeBuddyExecutor();
   afterEach(() => { delete process.env.CODEBUDDY_CN_AGENT_FILTER; });
 
-  it("keeps a long system prompt instead of the >2000-char replacement", () => {
+  it("keeps a long benign system prompt (>2000-char arm is gone)", () => {
     expect(systemOf(exec.transformRequest("glm-5.2", body(LONG), false, {}))).toBe(LONG);
   });
 
-  it("keeps an agent-identity system prompt", () => {
-    expect(systemOf(exec.transformRequest("glm-5.2", body(MARKER), false, {}))).toBe(MARKER);
+  it("replaces an agent-identity system prompt by default (WAF-safe path)", () => {
+    const out = exec.transformRequest("glm-5.2", body(MARKER), false, {});
+    expect(systemOf(out)).toMatch(/helpful AI assistant/);
   });
 
-  it("keeps typed-block content and its shape", () => {
-    const blocks = [{ type: "text", text: LONG }];
-    expect(systemOf(exec.transformRequest("glm-5.2", body(blocks), false, {}))).toEqual(blocks);
+  it("keeps typed-block content shape when replacing", () => {
+    const blocks = [{ type: "text", text: MARKER }];
+    const out = exec.transformRequest("glm-5.2", body(blocks), false, {});
+    expect(Array.isArray(systemOf(out))).toBe(true);
   });
 
   it("leaves user messages alone", () => {
@@ -41,18 +46,17 @@ describe("CodeBuddyExecutor system prompt is passed through by default", () => {
   });
 });
 
-describe("CodeBuddyExecutor filter is restorable via env gate", () => {
+describe("CodeBuddyExecutor: filter is disable-able via env gate", () => {
   const exec = new CodeBuddyExecutor();
   afterEach(() => { delete process.env.CODEBUDDY_CN_AGENT_FILTER; });
 
-  it("replaces an agent-identity prompt when re-enabled", () => {
-    process.env.CODEBUDDY_CN_AGENT_FILTER = "1";
-    const out = exec.transformRequest("glm-5.2", body(MARKER), false, {});
-    expect(systemOf(out)).toMatch(/helpful AI assistant/);
+  it("passes an agent-identity prompt through when explicitly disabled", () => {
+    process.env.CODEBUDDY_CN_AGENT_FILTER = "0";
+    expect(systemOf(exec.transformRequest("glm-5.2", body(MARKER), false, {}))).toBe(MARKER);
   });
 
-  it("still passes a long benign prompt when re-enabled (>2000 arm is gone)", () => {
-    process.env.CODEBUDDY_CN_AGENT_FILTER = "1";
+  it("still passes a long benign prompt when disabled", () => {
+    process.env.CODEBUDDY_CN_AGENT_FILTER = "0";
     expect(systemOf(exec.transformRequest("glm-5.2", body(LONG), false, {}))).toBe(LONG);
   });
 });
