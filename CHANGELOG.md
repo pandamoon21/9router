@@ -7,7 +7,7 @@ To install a fork build, use `.\install.ps1` (Windows) or `./install.sh` — pla
 `npm install -g 9router` / `npm update -g 9router` fetches the upstream registry
 build and silently discards everything listed here.
 
-## 2026-09-22 — CodeBuddy CN: WAF fingerprint + real-CLI version bump
+## 2026-09-22 — CodeBuddy CN: WAF fingerprint + real-CLI version bump + Claude-Code prompt filter default-on
 
 - **CodeBuddy CN**: match the real `@tencent-ai/codebuddy-code@2.156.0` client's
   per-request identity fingerprint. Tencent Aegis
@@ -22,6 +22,18 @@ build and silently discards everything listed here.
   `services/codebuddy/identity.js` (telemetry envelope) to the current npm
   release. First regression coverage for the fingerprint in
   `tests/unit/codebuddy-cn-waf-headers.test.js`.
+- **CodeBuddy CN**: the agent-identity filter is now **default-on**
+  (`CODEBUDDY_CN_AGENT_FILTER` env gate flipped from opt-in to opt-out).
+  Bisecting the gateway on 2026-09-22 proved that a system prompt containing
+  "You are Claude Code, Anthropic's official CLI for Claude." returns
+  `HTTP 400 code 11128 "Illegal API invocation from an unapproved channel"`
+  on `copilot.tencent.com`, while the same prompt with generic wording
+  returns 200. Aegis scans system-prompt content for brand-impersonation
+  strings, and Claude Code sends that exact phrase on every request — so
+  every Claude-Code-→-cbcn user hit a hard 400 without a rewrite in front.
+  The `text.length > 2000` arm stays gone; only the identity regex fires.
+  Escape hatch: `CODEBUDDY_CN_AGENT_FILTER=0` disables. Full findings in
+  `docs/codebuddy-cn-system-prompt-results.md` §5.
 
 ## 2026-09-20 — CodeBuddy CN: system prompt pass-through
 

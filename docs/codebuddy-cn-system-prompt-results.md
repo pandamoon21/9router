@@ -93,13 +93,60 @@ Also untested: `deepseek-v3-2-volc` (named in the original scope) — it only ex
 
 ## 4. What this changed
 
-`open-sse/executors/codebuddy-cn.js` — the `text.length > 2000` arm was deleting every long system prompt silently, with no error and no log. Removed. The `AGENT_PATTERN` identity arm is kept but gated behind `CODEBUDDY_CN_AGENT_FILTER=1` (off by default).
+`open-sse/executors/codebuddy-cn.js` — the `text.length > 2000` arm was
+deleting every long system prompt silently, with no error and no log. Removed.
+The `AGENT_PATTERN` identity arm was kept and initially gated behind
+`CODEBUDDY_CN_AGENT_FILTER=1` (off by default). **On 2026-09-22 the gate
+flipped to default-on** — see §5.
 
 Installed builds cache this in a minified chunk; `_patch_codebuddy_filter.py` rewrites it in place. Run `python _patch_codebuddy_filter.py <install-root>` (defaults to `%APPDATA%\npm\node_modules\9router`) — idempotent, backs up to `.bak` on first change.
 
 ---
 
-## 5. Method notes worth keeping
+## 5. WAF regression — identity filter is default-on (2026-09-22)
+
+**Symptom.** Claude Code → cbcn/deepseek-v4.1-flash returned `HTTP 400
+{"code":11128, "msg":"Illegal API invocation from an unapproved channel"}` on
+every request, including sessions with **zero history**. Every direct
+probe against `copilot.tencent.com` still returned 200 with a benign 25 KB
+persona — the previous §1-§4 findings held. Contradiction resolved by a
+bisect through the local gateway:
+
+| Case | System prompt | Result |
+|---|---|---|
+| A | `"You are a helpful assistant."` | 200 OK |
+| B | `"You are Claude Code, Anthropic's official CLI for Claude."` | **400 11128** |
+| E | *(no system prompt)* | 200 OK |
+
+Same request body, same credentials, same UA, same fingerprint headers. The
+one variable is the brand-impersonation phrase in the system message.
+Tencent's Aegis WAF (`galileotelemetry.tencent.com/aegiscontrol`) scans
+system-prompt content for competitor-brand strings; Claude Code hardcodes
+that exact phrase on every request, so every Claude-Code-→-cbcn user hit
+a hard 400 without a rewrite in front.
+
+**Fix.** `open-sse/executors/codebuddy-cn.js` flips the env gate:
+
+```js
+// was
+const FILTER_ENABLED = process.env.CODEBUDDY_CN_AGENT_FILTER === "1";
+// now
+const FILTER_ENABLED = process.env.CODEBUDDY_CN_AGENT_FILTER !== "0";
+```
+
+Only the identity-marker arm fires (the `text.length > 2000` arm stays
+gone). The regex is unchanged — it already targeted the exact phrases
+that trip the WAF. Escape hatch: `CODEBUDDY_CN_AGENT_FILTER=0` disables
+the rewrite (needed only when probing raw upstream behavior).
+
+**Scope.** The filter matches Claude Code, Cursor, Windsurf, Cline, Aider,
+Continue, Copilot, Cody, plus a handful of generic "you are an AI agent"
+patterns. Long *benign* persona prompts remain untouched — the 25 KB
+research fixture in §1-§3 still passes through by default.
+
+---
+
+## 6. Method notes worth keeping
 
 - **Responses are SSE.** Concatenate all deltas before matching a marker — one run split `ZORBLAX` into `"ORBLAX"` and produced a false negative.
 - **Some models answer in `reasoning_content`.** Read both fields or you will score a compliant model as a refusal.
