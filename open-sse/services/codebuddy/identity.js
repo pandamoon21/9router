@@ -23,7 +23,7 @@ export const CODEBUDDY_BUILD_INFO = {
   commit: "e9991e2be9dcafcce0fad23fc065dd91a7f3efed",
 };
 
-export const CODEBUDDY_CLI_VERSION = "2.133.1";
+export const CODEBUDDY_CLI_VERSION = "2.156.0";
 
 // Shared telemetry SDK topic (CLI shares WorkBuddy Desktop's SDK id).
 const GALILEO_SDK_TOPIC = "SDK-768de26ec97715a3bbab";

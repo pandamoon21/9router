@@ -25,15 +25,20 @@ export default {
     // MiniMax, DeepSeek, Hunyuan) takes reasoning via OpenAI-style reasoning_effort,
     // not its vendor-native thinking shape. Force the openai thinking format.
     thinkingFormat: "openai",
+    // UA/version bumped to match real CLI @tencent-ai/codebuddy-code@2.156.0
+    // (npm view … version, 2026-09-20). Older `CLI/x.y.z CodeBuddy/x.y.z` shape
+    // was the pre-2.156 wire fingerprint; current bundle sends `CodeBuddyCode/1.0`.
+    // Both accepted by Tencent WAF in probes; leaving the versioned string so
+    // /v2/report telemetry (identity.js) still has one CLI version to advertise.
     headers: {
-      "User-Agent": "CLI/2.133.1 CodeBuddy/2.133.1",
+      "User-Agent": "CLI/2.156.0 CodeBuddy/2.156.0",
       "X-Product": "SaaS",
       "X-IDE-Type": "CLI",
       "X-IDE-Name": "CLI",
       "x-requested-with": "XMLHttpRequest",
       "x-codebuddy-request": "1",
-    "X-Domain": "www.codebuddy.cn",
-    "X-IDE-Version": "2.133.1",
+      "X-Domain": "www.codebuddy.cn",
+      "X-IDE-Version": "2.156.0",
     },
     auth: {
       combined: true,
@@ -77,7 +82,7 @@ export default {
     stateUrl: "https://copilot.tencent.com/v2/plugin/auth/state",
     tokenUrl: "https://copilot.tencent.com/v2/plugin/auth/token",
     refreshUrl: "https://copilot.tencent.com/v2/plugin/auth/token/refresh",
-    userAgent: "CLI/2.133.1 CodeBuddy/2.133.1",
+    userAgent: "CLI/2.156.0 CodeBuddy/2.156.0",
     platform: "CLI",
     pollInterval: 5000,
   },

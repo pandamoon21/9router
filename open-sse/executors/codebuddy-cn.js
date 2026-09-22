@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { DefaultExecutor } from "./default.js";
 import { enforceResponseFormat } from "../utils/enforceResponseFormat.js";
 
@@ -13,6 +14,26 @@ import { enforceResponseFormat } from "../utils/enforceResponseFormat.js";
 export class CodeBuddyExecutor extends DefaultExecutor {
   constructor() {
     super("codebuddy-cn");
+  }
+
+  // Tencent Aegis (WAF) flags requests that lack the real CLI's per-request
+  // fingerprint. Real @tencent-ai/codebuddy-code@2.156.0 stamps these 8 headers
+  // on every /v2/chat/completions call — the registry only sets static ones, so
+  // we add the dynamic identity headers here. Values match constants extracted
+  // from the CLI bundle (see resolveAgentType → main/subagent/team).
+  buildHeaders(credentials, stream, url, model, body) {
+    const h = super.buildHeaders(credentials, stream, url, model, body);
+    const cid = crypto.randomUUID();
+    const mid = crypto.randomUUID();
+    h["X-Conversation-ID"] = cid;
+    h["X-Conversation-Request-ID"] = crypto.randomUUID();
+    h["X-Conversation-Message-ID"] = mid;
+    h["X-Request-ID"] = mid;
+    h["X-Agent-Intent"] = "craft";
+    h["X-Agent-Type"] = "main";
+    h["X-Private-Data"] = "false";
+    h["X-Product-Version"] = "2.156.0";
+    return h;
   }
 
   transformRequest(model, body, stream, credentials) {
