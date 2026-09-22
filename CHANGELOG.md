@@ -1,11 +1,27 @@
 # Fork changes (pandamoon21)
 
 Everything below this section is upstream `decolua/9router`. This section tracks
-what this fork adds on top. Latest upstream merged: **v0.5.81** (2026-09-20).
+what this fork adds on top. Latest upstream merged: **v0.5.85** (2026-09-22).
 
 To install a fork build, use `.\install.ps1` (Windows) or `./install.sh` — plain
 `npm install -g 9router` / `npm update -g 9router` fetches the upstream registry
 build and silently discards everything listed here.
+
+## 2026-09-22 — CodeBuddy CN: WAF fingerprint + real-CLI version bump
+
+- **CodeBuddy CN**: match the real `@tencent-ai/codebuddy-code@2.156.0` client's
+  per-request identity fingerprint. Tencent Aegis
+  (`galileotelemetry.tencent.com/aegiscontrol`) scores `/v2/chat` traffic
+  against the CLI's own header pattern; the registry only pinned static ones,
+  so the executor now stamps the 8 headers reversed from the CLI bundle:
+  `X-Conversation-ID` / `-Request-ID` / `-Message-ID` triple, `X-Request-ID`
+  aliased to the message id, `X-Agent-Intent="craft"`,
+  `X-Agent-Type="main"|"subagent"|"team"`, `X-Private-Data="false"`,
+  `X-Product-Version`. Bumps the advertised CLI version 2.133.1 → 2.156.0
+  across `codebuddy-cn` registry chat + oauth headers and
+  `services/codebuddy/identity.js` (telemetry envelope) to the current npm
+  release. First regression coverage for the fingerprint in
+  `tests/unit/codebuddy-cn-waf-headers.test.js`.
 
 ## 2026-09-20 — CodeBuddy CN: system prompt pass-through
 
@@ -66,6 +82,26 @@ omissions.
 
 ---
 
+# v0.5.85 (2026-09-22)
+
+## Features
+- **System One**: add `/v1/systemone` decision endpoint for Jev models (OpenCode Zen and OpenRouter lanes), wire into sidebar and Media Providers page with interactive probe testing
+- **CLI Tools**: add dynamic configuration, settings APIs, and official logos for Pi, OMP, Crush, ForgeCode, Smelt, and CodeWhale
+- **Analytics & Usage**: add Requests mode, provider/model breakdown charts, All Time period filter, and refined overview cards
+- **Combos**: add Cursor/Claude Default presets; support bulk select/delete and bulk strategy changes (Fallback / Round Robin / Fusion)
+- **Model Capabilities**: expose model capability metadata on `/v1/models` and aggregate capabilities across combo targets
+- **OpenCode Zen & MiMo**: add OpenCode Zen (`opencode-zen`) provider with free-tier fingerprint; switch default vision fallback to MiMo V2.6 Flash Free
+- **Qoder CN**: add `qoder-cn` provider for qoder.com.cn with OAuth flow, COSY protocol, and CN gateway routing
+
+## Fixes
+- **Translator**: map Claude `refusal` stop_reason to `content_filter` and surface explanation; strip replayed reasoning fields for Groq, Mistral, and Cerebras (#4220)
+- **Antigravity**: drop requestType `agent` to avoid false 429 `RESOURCE_EXHAUSTED`; separate weekly and short-window (5-hour) quotas and deduplicate dashboard rows
+- **Responses API**: report usage on `response.completed` so clients can auto-compact (#3432)
+- **Hugging Face**: migrate to Inference Providers router (`router.huggingface.co`), expand image models catalog, and add STT route
+- **Qoder**: prevent signed request replay (`403/103 Duplicate request`), handle code 110 billing blocks, and preserve upstream SSE error status
+- **Performance**: bound usage `lastUsed` scan to a 2-day window; map large budget tokens to `max` reasoning tier
+- **Docker**: publish verified multi-platform images (linux/amd64 and linux/arm64) with configurable apk build mirrors
+
 # v0.5.81 (2026-09-18)
 
 ## Features
@@ -75,6 +111,8 @@ omissions.
 - **i18n**: integrate Persian (fa) translation
 
 ## Fixes
+- **Cursor**: stop AgentService empty turns (`OUT 0`) and silent hangs — fold system prompts instead of `custom_system_prompt`, send `ModelDetails`, read Composer/Grok `thinking_delta`, ack request-context without echoing MCP tools, and reject IDE execs so the model can continue
+- **RTK**: for Cursor, compress source-format `tool_result` / `role:tool` **before** translation — its translator rewrites those shapes, so post-translate compression missed them. Other providers keep the post-translate pass unchanged
 - **OpenCode / OpenCode Go**: resolve 403 `FreeTierError` and 429 rate limits with canonical session format, valid User-Agent, and stable upstream session reuse; force stream and declare `forceStream` for free-tier SSE aggregation; cloak decoy tools, normalize Muse Free tool choice, and strip prior reasoning items on Responses models; route Union Alpha via Messages API
 - **Kiro**: preserve underscores in tool names (`mcp__server__tool`) and restore client tool names in responses; use neutral placeholder for tool-result-only turns; forward tool-result images
 - **Stream**: report aborts after HTTP 200 in-band (per-format error frames) instead of closing silently

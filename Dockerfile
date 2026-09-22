@@ -1,11 +1,21 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:22-alpine
+ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG APP_VERSION=unknown
+
 FROM ${NODE_IMAGE} AS base
+ARG ALPINE_MIRROR
 WORKDIR /app
-# CN mirror for apk (used by builder and runner stages)
-RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
+
+# Use the official Alpine mirror by default. A repository variable/build arg can
+# override it for environments that require a regional mirror.
+RUN if [ "$ALPINE_MIRROR" != "dl-cdn.alpinelinux.org" ]; then \
+      sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories; \
+    fi
 
 FROM base AS builder
+ARG NPM_REGISTRY
 
 # No C++ toolchain. The only native dep is better-sqlite3, and it is an
 # optionalDependency that npm resolves to a prebuilt musl binary — a measured
@@ -32,9 +42,16 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm ci --registry=https://registry.npmmirror.com && npm run build
 
 FROM ${NODE_IMAGE} AS runner
+ARG ALPINE_MIRROR
+ARG APP_VERSION
 WORKDIR /app
 
-LABEL org.opencontainers.image.title="9router"
+RUN if [ "$ALPINE_MIRROR" != "dl-cdn.alpinelinux.org" ]; then \
+      sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories; \
+    fi
+
+LABEL org.opencontainers.image.title="9router" \
+      org.opencontainers.image.version="${APP_VERSION}"
 
 ENV NODE_ENV=production
 ENV PORT=20128
