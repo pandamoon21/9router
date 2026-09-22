@@ -47,7 +47,6 @@ export default {
   },
   // Same model lineup exposed by the CN gateway — intl backend is the same catalog.
   models: [
-    { id: "deep-model", name: "Deep" },
     { id: "deepseek-v4.1-flash", name: "Deepseek-V4.1-Flash" },
     { id: "deepseek-v4.1-flash-sg", name: "Deepseek-V4.1-Flash" },
     { id: "gpt-6-astra", name: "GPT-6-Astra" },

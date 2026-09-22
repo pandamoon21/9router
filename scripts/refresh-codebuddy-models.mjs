@@ -46,14 +46,14 @@ const PROVIDERS = {
 
 // Chat models only: skip the "default" placeholder, image-only endpoints, and
 // entries without tool-call support. Also skip cbai's virtual alias ids
-// (default-model, fast-model, primary-model, balanced-model, reasoning-model) —
-// those are UI aliases that resolve to a real model on the server, not routable
-// backends themselves.
+// (default-model, fast-model, primary-model, balanced-model, reasoning-model,
+// deep-model) — those are UI aliases that resolve to a real model on the
+// server, not routable backends themselves.
 function isChatModel(m) {
   if (!m.supportsToolCall) return false;
   if (m.id === "default") return false;
   if (/^hunyuan-image/.test(m.id)) return false;
-  if (/^(default|fast|balanced|primary|reasoning)-model(-lite)?$/.test(m.id)) return false;
+  if (/^(default|fast|balanced|primary|reasoning|deep)-model(-lite)?$/.test(m.id)) return false;
   return true;
 }
 
