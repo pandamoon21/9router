@@ -4,19 +4,17 @@
  *
  * Supports both providers:
  *   codebuddy-cn   → copilot.tencent.com/v3/config (User-Agent: CLI/x.y.z)
- *   codebuddy-intl → www.codebuddy.ai/v3/config    (User-Agent: IDE/x.y.z)
+ *   codebuddy-intl → www.codebuddy.ai/v3/config    (User-Agent: CLI/x.y.z)
  *
- * Why a script, not runtime:
- *   - The catalog is stable enough that pinning it in the registry is fine
- *     (upstream 9router also pins theirs); avoiding a runtime fetch keeps
- *     cold start deterministic and independent of a live token.
- *   - Run after user reports "new model X missing", or on a cron.
+ * cbai gates `data.models` behind the full CLI fingerprint headers — not just
+ * Bearer. We derive the uid from the JWT's `sub` claim and stamp X-User-Id +
+ * X-Product + X-Domain + X-Requested-With, matching what the real CLI sends.
  *
  * Usage:
  *   node scripts/refresh-codebuddy-models.mjs [--provider=cn|intl] [--write] [--token=<jwt>]
  *
  * Defaults: --provider=cn, dry-run.
- * By default reads the access token from the local 9router SQLite DB at
+ * By default reads the access token from the local 9router SQLite runtime at
  *   %APPDATA%/9router/db/data.sqlite (Windows) or ~/.9router/db/data.sqlite.
  *
  * ponytail: writes back only the catalog block; the transport/oauth
@@ -35,23 +33,44 @@ const PROVIDERS = {
     registry: "open-sse/providers/registry/codebuddy-cn.js",
     configUrl: "https://copilot.tencent.com/v3/config",
     userAgent: "CLI/2.156.0 CodeBuddy/2.156.0",
+    domain: "www.codebuddy.cn",
   },
   intl: {
     id: "codebuddy-intl",
     registry: "open-sse/providers/registry/codebuddy-intl.js",
     configUrl: "https://www.codebuddy.ai/v3/config",
-    userAgent: "IDE/2.156.0 CodeBuddy/2.156.0",
+    userAgent: "CLI/2.156.0 CodeBuddy/2.156.0",
+    domain: "www.codebuddy.ai",
   },
 };
 
-// A cbcn/cbai model is user-callable only when it can chat. Image-only
-// endpoints (hunyuan-image-*) and the placeholder "default" ride a different
-// code path.
+// Chat models only: skip the "default" placeholder, image-only endpoints, and
+// entries without tool-call support. Also skip cbai's virtual alias ids
+// (default-model, fast-model, primary-model, balanced-model, reasoning-model) —
+// those are UI aliases that resolve to a real model on the server, not routable
+// backends themselves.
 function isChatModel(m) {
   if (!m.supportsToolCall) return false;
   if (m.id === "default") return false;
   if (/^hunyuan-image/.test(m.id)) return false;
+  if (/^(default|fast|balanced|primary|reasoning)-model(-lite)?$/.test(m.id)) return false;
   return true;
+}
+
+function extractUid(jwt) {
+  // Best-effort JWT payload decode — same pattern as identity.js's extractCodebuddyUid.
+  // Falls back to null so the caller can still send a bare bearer (cbcn accepts it).
+  const parts = jwt.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+    // cbai uid lives in `sub`; cbcn's is in `preferred_username`.
+    return payload.sub || payload.preferred_username || payload.uid || null;
+  } catch {
+    return null;
+  }
 }
 
 async function readTokenFromDb(providerId) {
@@ -72,13 +91,29 @@ async function readTokenFromDb(providerId) {
 }
 
 async function fetchCatalog(cfg, token) {
-  const r = await fetch(cfg.configUrl, {
-    headers: { Authorization: `Bearer ${token}`, "User-Agent": cfg.userAgent },
-  });
+  const uid = extractUid(token);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "User-Agent": cfg.userAgent,
+    "X-Product": "SaaS",
+    "X-Domain": cfg.domain,
+    "X-Requested-With": "XMLHttpRequest",
+    Accept: "application/json, text/plain, */*",
+  };
+  if (uid) headers["X-User-Id"] = uid;
+
+  const r = await fetch(cfg.configUrl, { headers });
   if (!r.ok) throw new Error(`${cfg.configUrl} returned ${r.status}: ${await r.text()}`);
   const body = await r.json();
   if (body.code !== 0) throw new Error(`config error: ${JSON.stringify(body).slice(0, 200)}`);
-  return body.data.models;
+  const models = body.data?.models;
+  if (!Array.isArray(models)) {
+    throw new Error(
+      `${cfg.configUrl} returned no data.models — token may be missing catalog scope. ` +
+      `Verify the JWT is still valid and the account is authorized.`,
+    );
+  }
+  return models;
 }
 
 function renderCatalog(entries) {
@@ -112,6 +147,7 @@ async function main() {
 
   const token = tokenArg || (await readTokenFromDb(cfg.id));
   const upstream = await fetchCatalog(cfg, token);
+
   const chat = upstream.filter(isChatModel);
   const entries = chat.map((m) => ({ id: m.id, name: m.name }));
 
@@ -120,7 +156,8 @@ async function main() {
   const added = [...upstreamIds].filter((id) => !currentIds.has(id)).sort();
   const removed = [...currentIds].filter((id) => !upstreamIds.has(id)).sort();
 
-  console.log(`[${cfg.id}] upstream chat models: ${entries.length}`);
+  console.log(`[${cfg.id}] via ${cfg.configUrl}`);
+  console.log(`  upstream chat models: ${entries.length}`);
   if (added.length) console.log("  + " + added.join("\n  + "));
   if (removed.length) console.log("  - " + removed.join("\n  - "));
   if (!added.length && !removed.length) console.log("  (registry already in sync)");
@@ -132,7 +169,7 @@ async function main() {
 
   if (write) {
     rewriteRegistry(registryPath, renderCatalog(entries));
-    console.log(`\nwrote ${entries.length} entries -> ${path.relative(REPO_ROOT, registryPath)}`);
+    console.log(`\nwrote ${entries.length} entries → ${path.relative(REPO_ROOT, registryPath)}`);
   } else if (added.length || removed.length) {
     console.log("\n(use --write to apply)");
   }
