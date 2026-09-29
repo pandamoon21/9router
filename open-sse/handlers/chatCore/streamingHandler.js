@@ -34,7 +34,12 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
     return createSSETransformStreamWithLogger(FORMATS.OPENAI_RESPONSES, codexTarget, provider, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete, apiKey, customToolNames, credentials);
   }
 
-  if (needsTranslation(targetFormat, sourceFormat)) {
+  if (needsTranslation(targetFormat, sourceFormat) || toolNameMap?.size > 0) {
+    // Same-format streams normally take the passthrough branch below, but that
+    // path forwards upstream SSE verbatim and never restores tool names. When a
+    // merge/rename map is present (e.g. CodeBuddy tool-name sanitisation), route
+    // through the translate stream so translateResponse() can map the names back
+    // to what the client sent — it is a no-op for identical formats otherwise.
     return createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete, apiKey, customToolNames, credentials);
   }
 

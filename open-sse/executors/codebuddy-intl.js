@@ -1,5 +1,6 @@
 import { DefaultExecutor } from "./default.js";
 import { enforceResponseFormat } from "../utils/enforceResponseFormat.js";
+import { sanitizeCodeBuddyToolNames, stripCodeBuddySchemaMarkers, flattenCodeBuddyToolChoice } from "../utils/codebuddyToolSanitize.js";
 
 /**
  * CodeBuddyIntlExecutor — talks to https://www.codebuddy.ai/v2/chat/completions
@@ -18,6 +19,14 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
     let transformed = super.transformRequest(model, body, stream, credentials);
     transformed.stream = true;
     transformed = enforceResponseFormat(transformed) || transformed;
+
+    // Same tool-shape normalisation as codebuddy-cn: the intl gateway shares the
+    // Tencent model validators that reject illegal/duplicated tool names (11152),
+    // `$schema`-carrying parameter schemas (11129), and object-shaped tool_choice
+    // (11101).
+    transformed = flattenCodeBuddyToolChoice(transformed);
+    transformed = sanitizeCodeBuddyToolNames(transformed, body);
+    transformed = stripCodeBuddySchemaMarkers(transformed);
 
     const eff = transformed.reasoning_effort;
     if (eff === "none" || eff === "off") {

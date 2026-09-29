@@ -7,6 +7,42 @@ To install a fork build, use `.\install.ps1` (Windows) or `./install.sh` — pla
 `npm install -g 9router` / `npm update -g 9router` fetches the upstream registry
 build and silently discards everything listed here.
 
+## 2026-09-29 — CodeBuddy CN/Intl: tool-shape normalisation (11152 / 11129 / 11101)
+
+Routing OpenCode or Codex through CodeBuddy CN failed on several models with
+`[400] code 11152 "the tool name is invalid or duplicated"`. Bisecting the live
+gateway with a real 365-tool payload isolated **three** distinct validator
+quirks, each model-family-specific:
+
+- **11152 — tool names.** Kimi (`k3-1`, `k2.7`) and DeepSeek (the same models
+  that then trip 11129) enforce `^[a-zA-Z_][a-zA-Z0-9_-]*$`; GLM/Hunyuan/MiniMax
+  do not. The 9Remote MCP tool `9remote_openArtifact` starts with a digit, so
+  every request carrying it was rejected outright. Illegal names are now
+  rewritten to a valid spelling, and every reference to them — `tool_choice`,
+  assistant `tool_calls` in history, Claude `tool_use` blocks — is rewritten too.
+- **11129 — parameter schemas.** DeepSeek (`v4-pro`, `v4.1-flash`) rejects a
+  tool whose `parameters` carries a `$schema` marker when the schema is
+  non-trivial ("invalid function call parameters"). The marker carries no meaning
+  to these validators, so it is stripped recursively.
+- **11101 — `tool_choice`.** The gateway unmarshals `tool_choice` as a Go string
+  ("cannot unmarshal object into Go struct field Request.tool_choice of type
+  string"), rejecting the OpenAI `{type:"function",function:{name}}` object form
+  that OpenCode/Codex send. It is flattened to `"auto"|"required"|"none"|<name>`.
+
+All three live in `open-sse/utils/codebuddyToolSanitize.js`, applied from the
+`codebuddy-cn` / `codebuddy-intl` executors. Renames are recorded via
+`recordRenamedToolNames` so the response leg restores the client's own tool
+spelling.
+
+Fixed alongside: same-format streaming (openai → openai, i.e. OpenCode/Codex →
+cbcn) took the blind passthrough stream, which never restores tool names, so a
+streamed tool call came back suffixed under the sanitised name. The streaming
+handler now routes through the translate stream whenever a `toolNameMap` exists
+— a no-op for identical formats that still applies `restoreToolNames()`.
+
+Coverage: `tests/unit/codebuddy-tool-name-sanitize.test.js` (12 cases),
+`scripts/verify-codebuddy-tools.mjs` (live end-to-end against a running gateway).
+
 ## 2026-09-22 — CodeBuddy CN: WAF fingerprint + real-CLI version bump + Claude-Code prompt filter default-on
 
 - **CodeBuddy CN**: match the real `@tencent-ai/codebuddy-code@2.156.0` client's

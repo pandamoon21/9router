@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { DefaultExecutor } from "./default.js";
 import { enforceResponseFormat } from "../utils/enforceResponseFormat.js";
+import { sanitizeCodeBuddyToolNames, stripCodeBuddySchemaMarkers, flattenCodeBuddyToolChoice } from "../utils/codebuddyToolSanitize.js";
 
 /**
  * CodeBuddyExecutor — talks to https://copilot.tencent.com/v2/chat/completions
@@ -40,6 +41,18 @@ export class CodeBuddyExecutor extends DefaultExecutor {
     let transformed = super.transformRequest(model, body, stream, credentials);
     transformed.stream = true;
     transformed = enforceResponseFormat(transformed) || transformed;
+
+    // CodeBuddy CN model validators reject tool shapes the plain OpenAI API
+    // accepts: the Kimi/DeepSeek gateways demand a stricter tool-name grammar
+    // (11152), DeepSeek rejects a `$schema` marker on non-trivial parameter
+    // schemas (11129), and the gateway unmarshals `tool_choice` as a string
+    // (11101 rejects the OpenAI object form). Normalise all three before
+    // dispatch; the name map is keyed on the original `body` chatCore still
+    // holds (super.transformRequest may have cloned it) so the response leg can
+    // restore the client's tool spelling.
+    transformed = flattenCodeBuddyToolChoice(transformed);
+    transformed = sanitizeCodeBuddyToolNames(transformed, body);
+    transformed = stripCodeBuddySchemaMarkers(transformed);
 
     // Tencent's content filter flags CLI agent system prompts ("You are Claude
     // Code, Anthropic's official CLI...") as prompt injection / sensitive content
