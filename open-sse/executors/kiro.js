@@ -550,16 +550,28 @@ export class KiroExecutor extends BaseExecutor {
     if (first.kind === "terminal_stop" || first.kind === "upstream_error") {
       return this.integrityFailureSSE(first);
     }
+    // Every path below either retries upstream or synthesises a local error, so
+    // the original response body is never read again. It has to be cancelled
+    // explicitly: the transformer returned before consuming the stream, and a
+    // live-but-abandoned response keeps the connection (and the client's
+    // request) open forever -- the turn just hangs with no terminal frame.
+    const releaseRaw = () => rawResponse?.body?.cancel?.("kiro integrity gate releasing upstream").catch(() => {});
     if (first.kind === "invalid_tool" && !options.repairEnabled) {
+      await releaseRaw();
+      return encodeSSEError("invalid_kiro_tool_call", first.message, first.diagnostics);
+    }
+    if (first.kind === "truncated_tool" && !options.repairEnabled) {
+      await releaseRaw();
       return encodeSSEError("invalid_kiro_tool_call", first.message, first.diagnostics);
     }
 
-    const repairKind = ["ellipsis", "short_final", "invalid_tool"].includes(first.kind)
+    const repairKind = ["ellipsis", "short_final", "invalid_tool", "truncated_tool"].includes(first.kind)
       ? first.kind
       : null;
     const repairBody = repairKind
-      ? appendRepairInstruction(args.body, repairKind === "invalid_tool" ? "tool" : repairKind)
+      ? appendRepairInstruction(args.body, first.kind === "invalid_tool" || first.kind === "truncated_tool" ? "tool" : repairKind)
       : structuredClone(args.body || {});
+    await releaseRaw();
 
     const retry = await BaseExecutor.prototype.execute.call(this, {
       ...args,
@@ -599,7 +611,7 @@ export class KiroExecutor extends BaseExecutor {
       ? "kiro_ellipsis_retry_failed"
       : second.kind === "short_final"
         ? "kiro_short_final_retry_failed"
-        : second.kind === "invalid_tool"
+        : second.kind === "invalid_tool" || second.kind === "truncated_tool"
           ? "kiro_tool_call_repair_retry_failed"
           : "kiro_missing_terminal_retry_failed";
     return encodeSSEError(
@@ -694,13 +706,21 @@ export class KiroExecutor extends BaseExecutor {
       transport_state: diagnostics?.transport_state || "unknown",
       stop_reason: diagnostics?.stop_reason || null,
       stop_disposition: diagnostics?.stop_disposition || "terminal_incomplete",
+      truncated_tool: diagnostics?.truncated_tool || null,
       response_state: diagnostics?.response_state || "no_semantic_output",
       event_counts: diagnostics?.event_counts || {},
       incomplete_frame_bytes: diagnostics?.incomplete_frame_bytes || 0
     };
     if (safeDiagnostics.stop_disposition === "retryable_protocol_failure") {
-      const kind = safeDiagnostics.terminal_provenance === "invalid_tool_call"
-        ? "invalid_tool"
+      // A truncated tool call (stream cut mid-input) is repaired the same way as
+      // a malformed one: re-ask for the complete call. The transformer proves
+      // which it was via terminal_provenance/truncated_tool; both spellings are
+      // accepted so the distinction survives the round trip.
+      const truncated = safeDiagnostics.truncated_tool ||
+        safeDiagnostics.terminal_provenance === "truncated_tool_call";
+      const kind = safeDiagnostics.terminal_provenance === "invalid_tool_call" ||
+        safeDiagnostics.terminal_provenance === "truncated_tool_call"
+        ? (truncated ? "truncated_tool" : "invalid_tool")
         : "retryable_stop";
       return { kind, message: output.error?.message, diagnostics: safeDiagnostics };
     }
@@ -759,6 +779,7 @@ export class KiroExecutor extends BaseExecutor {
       usage: null,
       inThinking: false,
       toolValidationError: null,
+      truncatedTool: null,
       validatedFrames: 0,
       finished: false
     };
@@ -768,6 +789,9 @@ export class KiroExecutor extends BaseExecutor {
       transport_state: state.transportState,
       stop_reason: state.stopReason,
       stop_disposition: stopDisposition(state.stopReason, state.hasToolCalls),
+      truncated_tool: state.truncatedTool
+        ? { id: state.truncatedTool.id, name: state.truncatedTool.name }
+        : null,
       response_state: state.hasToolCalls
         ? "valid_tool"
         : state.hasText || state.hasReasoning || state.hasCode
@@ -796,6 +820,8 @@ export class KiroExecutor extends BaseExecutor {
       state.finished = true;
       state.terminalProvenance = provenance;
       state.transportState = extra.transport_state || "corrupt_frame";
+      // Keep the buffered tools for diagnostics; the turn is over either way.
+      state.bufferedToolBytes = 0;
       const detail = diagnostics({
         stop_disposition: extra.stop_disposition || "terminal_incomplete",
         ...extra
@@ -840,6 +866,30 @@ export class KiroExecutor extends BaseExecutor {
         throw new Error(`Kiro tool input must be valid object JSON (${error.message})`);
       }
     };
+    // A tool whose input never became a parseable object AND was still an open
+    // string fragment is not "malformed" -- the model stopped mid-call. Kiro
+    // streams `input` as an OPEN JSON object with no close event (see
+    // docs/08-eventstream-and-tools.md), so a cut-off Write lands here as
+    // `{"file_path":"…","content":"i` with nothing to signal completion.
+    //
+    // That distinction matters because the two cases need opposite handling:
+    //   - usable-but-invalid (e.g. a tool_call wrapper missing its nested MCP
+    //     name): drop it, the turn is otherwise fine.
+    //   - truncated: the model intended a call it never finished. Dropping it
+    //     makes the router answer `stop` with no tool_use block, so the client
+    //     is told the (hallucinated) action succeeded and the edit silently
+    //     never happens. These must be retried, not swallowed.
+    const truncatedAndUnusable = () => {
+      for (const tool of state.tools.values()) {
+        if (tool.inputKind === "object") continue;
+        try {
+          parsedToolInput(tool);
+        } catch {
+          return tool;
+        }
+      }
+      return null;
+    };
     const emitTools = (controller) => {
       for (const tool of state.tools.values()) {
         // Validate per tool, not per turn: one unusable fragment used to throw out
@@ -859,7 +909,15 @@ export class KiroExecutor extends BaseExecutor {
         } catch (error) {
           state.droppedTools = (state.droppedTools || 0) + 1;
           state.toolValidationError ||= error.message;
-          console.error(`[Kiro] dropping unusable tool call ${tool.id} (${tool.name}): ${error.message}`);
+          // An open string fragment means the model was cut off mid-call, not
+          // that it wrote bad JSON. Track it so finish() can retry instead of
+          // reporting a successful turn whose tool call was thrown away.
+          const truncated = tool.inputKind !== "object" && tool.inputKind !== undefined;
+          if (truncated) state.truncatedTool = tool;
+          console.error(
+            `[Kiro] dropping unusable tool call ${tool.id} (${tool.name}): ${error.message}` +
+            (truncated ? " [truncated: model stopped mid-tool-call]" : "")
+          );
           continue;
         }
         const index = state.toolCounter++;
@@ -1179,18 +1237,42 @@ export class KiroExecutor extends BaseExecutor {
         );
         return;
       }
+      // A truncated tool call is never silently "complete". Claude Code cannot
+      // see a tool that was dropped, so answering `stop` told it the model's
+      // (hallucinated) Write had run while the file was never touched -- the
+      // edit silently vanished and the turn looked successful. A declared
+      // `tool_use` stop reason, or any text already streamed, makes the
+      // truncation certain rather than speculative, so surface it as the
+      // retryable protocol failure it is and let the repair retry re-ask.
+      const truncatedTool = truncatedAndUnusable() || state.truncatedTool;
+      const truncatedToolIsFatal = truncatedTool &&
+        state.stopReason === "tool_use" && !state.hasToolCalls;
+      if (truncatedToolIsFatal) {
+        const message =
+          `Kiro ended with stop_reason=tool_use but the ${truncatedTool.name} tool call ` +
+          `(${truncatedTool.id}) was truncated mid-input: ${state.toolValidationError || "invalid JSON"}`;
+        console.error(`[Kiro] ${message}`);
+        fail(
+          controller,
+          "truncated_tool_call",
+          "invalid_kiro_tool_call",
+          message,
+          { transport_state: state.transportState, stop_disposition: "retryable_protocol_failure" }
+        );
+        return;
+      }
       // Fail only when the turn has nothing usable left. emitTools() validates
       // per tool and drops just the unusable ones, so this has to run AFTER it:
       // before, the rejected tool was still buffered and tools.size was never 0.
       // A turn that also produced text keeps that text -- the dropped call is
       // logged, not fatal.
-      if (state.toolValidationError && !state.hasToolCalls &&
-          !state.hasText && !state.hasReasoning && !state.hasCode) {
+      if (truncatedTool || (state.toolValidationError && !state.hasToolCalls &&
+          !state.hasText && !state.hasReasoning && !state.hasCode)) {
         fail(
           controller,
           "invalid_tool_call",
           "invalid_kiro_tool_call",
-          state.toolValidationError,
+          state.toolValidationError || "Kiro tool call was incomplete",
           { transport_state: state.transportState, stop_disposition: "retryable_protocol_failure" }
         );
         return;

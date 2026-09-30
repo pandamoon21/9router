@@ -7,6 +7,59 @@ To install a fork build, use `.\install.ps1` (Windows) or `./install.sh` — pla
 `npm install -g 9router` / `npm update -g 9router` fetches the upstream registry
 build and silently discards everything listed here.
 
+## 2026-09-30 — Kiro: a tool call cut off mid-input is retried, never reported as success
+
+Claude Code on `kr/claude-opus-4.8` logged
+
+```
+[Kiro] dropping unusable tool call toolu_bdrk_… (Write): Kiro tool input must be
+valid object JSON (Expected ',' or '}' after property value in JSON at position 77
+(line 1 column 78))
+```
+
+and the `Write` silently never happened. `position 77 (line 1 column 78)` is not
+generic corruption: it is exactly what `JSON.parse` reports for a Claude Code
+`Write` payload **cut to 77 characters**, landing right after the closing quote
+of `file_path` and before `,"content"` opens. The model's output had stopped
+mid-tool-call; the input was truncated, not malformed.
+
+Kiro streams a tool's `input` as an **open** JSON object with no close event, so
+a cut-off call arrives as `{"file_path":"…","content":"i` with nothing to mark it
+unfinished. The terminal classifier had branches for tools-without-text,
+text-ending-in-ellipsis and text-announcing-a-future-action — but none for
+**text followed by a truncated tool call**, so that shape fell through as
+`complete`. `finish()` logged the drop and closed the turn as a successful
+`finish_reason: "stop"`.
+
+Claude Code receives `stop` with no `tool_use` block, concludes the turn simply
+had no call, and records the model's *"I'll write the file."* as a completed
+action — a hallucinated edit the client cannot see is missing. (The two adjacent
+`toolu_bdrk_…` ids sharing a position in the field logs are a client-side retry
+pair after that silent no-op, not two Kiro attempts.)
+
+`open-sse/executors/kiro.js`:
+
+- **Truncated ≠ malformed.** A tool whose input never became an object *and was
+  still an open string fragment* is unfinished. A complete-but-invalid wrapper
+  (a `tool_call` missing its nested MCP name) is still dropped quietly — the two
+  cases need opposite handling and are now told apart.
+- **A truncated call is never reported as success.** With `stop_reason:
+  tool_use` it now fails as `retryable_protocol_failure`, so the existing
+  bounded repair retry fires and re-asks for the complete call. Verified
+  end-to-end: the retry's full `Write` reaches the client as a real `tool_calls`
+  turn.
+- The signal is carried through a new `truncated_tool_call` provenance and
+  `truncated_tool` diagnostics field into a distinct `truncated_tool` kind.
+- **Fixed a body leak found while wiring this up**: local error paths in
+  `runIntegrityRecovery` returned without cancelling the upstream response, so a
+  turn ended with the client stream left open and no terminal frame. The
+  abandoned body is now released before every early return.
+
+Coverage: `tests/unit/kiro-usage-and-tool-integrity.test.js`, section **F** — the
+field message is reproduced byte-exactly from the real payload shape, plus
+repair-on recovery, repair-off fast-fail, the diagnostics payload, and the
+malformed-but-complete case that must stay non-fatal.
+
 ## 2026-09-29 — CodeBuddy CN/Intl: tool-shape normalisation (11152 / 11129 / 11101)
 
 Routing OpenCode or Codex through CodeBuddy CN failed on several models with

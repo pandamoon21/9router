@@ -252,6 +252,121 @@ describe("C: one unusable tool fragment does not take the whole turn with it", (
   });
 });
 
+describe("F: a tool call cut off mid-input is retried, never reported as success", () => {
+  // Field shape (Claude Code + kr/claude-opus-4.8): the model streams a sentence,
+  // then a Write whose input is an OPEN JSON object, and the stream ends without
+  // a close event. Kiro's own log read:
+  //   dropping unusable tool call toolu_bdrk_… (Write): Kiro tool input must be
+  //   valid object JSON (Expected ',' or '}' after property value in JSON at
+  //   position 77 (line 1 column 78))
+  // The old code logged that and closed the turn as finish_reason "stop". Claude
+  // Code saw no tool_use block, assumed the write happened, and the edit was
+  // silently lost -- a hallucinated action recorded as a success.
+  //
+  // This is a Claude Code Write payload whose input was cut to exactly 77
+  // characters. With a realistic path length the cut lands right after the
+  // closing quote of the `file_path` value, before the `,"content"` pair --
+  // which is precisely where the field log's position 77 came from.
+  const WRITE_PATH = "/c/Users/naufa/Documents/Github/9router/src/app/api/x/route.ts";
+  const TRUNCATED_WRITE = JSON.stringify({ file_path: WRITE_PATH, content: "i" }).slice(0, 77);
+
+  it("places the cut at position 77 like the field log", () => {
+    expect(TRUNCATED_WRITE).toHaveLength(77);
+    expect(TRUNCATED_WRITE.endsWith('route.ts"')).toBe(true);
+    expect(() => JSON.parse(TRUNCATED_WRITE))
+      .toThrowError(/Expected ',' or '}' after property value in JSON at position 77 \(line 1 column 78\)/);
+  });
+
+  it("retries instead of answering stop when text preceded the truncated call", async () => {
+    // Attempt 1: text, then a truncated Write. Attempt 2 (repair): a complete
+    // Write, which must reach the client as a real tool call.
+    const repaired = JSON.stringify({ file_path: WRITE_PATH, content: "export const x = 1;" });
+    fetchMock
+      .mockResolvedValueOnce(response([
+        frame("assistantResponseEvent", { content: "I'll write the file." }),
+        frame("toolUseEvent", { toolUseId: "toolu_bdrk_01R93sLhjS7tfBqsTr9Be5Ww", name: "Write", input: TRUNCATED_WRITE }),
+        frame("metadataEvent", { stopReason: "tool_use" }),
+        ...METERED
+      ]))
+      .mockResolvedValueOnce(response([
+        frame("toolUseEvent", { toolUseId: "toolu_bdrk_01R93sLhjS7tfBqsTr9Be5Ww", name: "Write", input: repaired }),
+        frame("metadataEvent", { stopReason: "tool_use" }),
+        ...METERED
+      ]));
+
+    const body = await (await execute()).response.text();
+
+    // The repair re-ask ran, and its complete call is what the client receives.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body).toContain('"finish_reason":"tool_calls"');
+    expect(body).toContain('\\"file_path\\":\\"/c/Users/naufa');
+    // The truncated input never reaches the client as arguments.
+    expect(body).not.toContain(':\\\\"file_path\\\\":\\\\"/c/Users/naufa/Documents/Github/9router/src/app/api/x/route.ts\\\\"');
+  });
+
+  it("retries a truncated call that has no accompanying text", async () => {
+    // Repair retry answers with a usable turn so the whole flow completes.
+    fetchMock
+      .mockResolvedValueOnce(response([
+        frame("toolUseEvent", { toolUseId: "toolu_bdrk_01R9nyt9ZdCCiVncGMdxGtqe", name: "Write", input: TRUNCATED_WRITE }),
+        frame("metadataEvent", { stopReason: "tool_use" })
+      ]))
+      .mockResolvedValueOnce(response([
+        frame("assistantResponseEvent", { content: "The path was invalid; here is the corrected content instead." }),
+        frame("metadataEvent", { stopReason: "end_turn" })
+      ]));
+
+    const body = await (await execute()).response.text();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body).toContain("corrected content");
+    expect(body).not.toContain("truncated mid-input");
+  });
+
+  it("reports the truncation in the diagnostics payload", async () => {
+    const body = await runNoRepair([
+      frame("assistantResponseEvent", { content: "Writing now." }),
+      frame("toolUseEvent", { toolUseId: "cut", name: "Write", input: TRUNCATED_WRITE }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]);
+
+    const detail = JSON.parse(body.slice(body.indexOf("data: ") + 6).split("\n")[0]).error.details;
+    expect(detail.truncated_tool).toEqual({ id: "cut", name: "Write" });
+    expect(detail.terminal_provenance).toBe("truncated_tool_call");
+    expect(detail.stop_disposition).toBe("retryable_protocol_failure");
+  });
+
+  it("surfaces the failure immediately when repair is disabled", async () => {
+    const body = await runNoRepair([
+      frame("assistantResponseEvent", { content: "Writing now." }),
+      frame("toolUseEvent", { toolUseId: "cut", name: "Write", input: TRUNCATED_WRITE }),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]);
+    expect(body).toContain("invalid_kiro_tool_call");
+    expect(body).toContain("truncated mid-input");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat a complete-but-invalid tool_call wrapper as truncated", async () => {
+    // A nested tool_call missing its `name` is invalid but NOT truncated: the
+    // model finished the object, it just built a wrapper we cannot forward.
+    // It must still be dropped quietly when a valid sibling call exists.
+    const body = await run([
+      frame("toolUseEvent", {
+        toolUseId: "good",
+        name: "tool_call",
+        input: { name: "mcp_search", arguments: { q: "router" } }
+      }),
+      frame("toolUseEvent", { toolUseId: "bad", name: "tool_call", input: { arguments: { q: "router" } } }),
+      frame("metadataEvent", { stopReason: "tool_use" }),
+      ...METERED
+    ]);
+
+    expect(body).toContain('\\"name\\":\\"mcp_search\\"');
+    expect(body).not.toContain('"id":"bad"');
+    expect(body).toContain('"finish_reason":"tool_calls"');
+  });
+});
+
 describe("B: truncation after output closes as length, not as a failure", () => {
   it("keeps the text and reports finish_reason length", async () => {
     const body = await run([
