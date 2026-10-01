@@ -335,12 +335,31 @@ function buildCliPackage() {
   console.log(`📁 Output: ${cliAppDir}`);
 
   try {
-    const { execSync: exec } = require("child_process");
-    const size = exec(`du -sh "${cliAppDir}"`, { encoding: "utf8" }).trim();
-    console.log(`📊 Package size: ${size.split("\t")[0]}`);
+    // `du -sh` does not exist on Windows (and its stderr leaks past the catch,
+    // so a successful build printed a scary "du is not recognized" error).
+    // Walk the tree in-process instead - portable, and no shell noise.
+    const size = directorySize(cliAppDir);
+    console.log(`📊 Package size: ${(size / 1024 / 1024).toFixed(2)} MB`);
   } catch (e) {
     // Silent fail on size check
   }
+}
+
+function directorySize(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      total += directorySize(full);
+    } else if (entry.isFile()) {
+      try {
+        total += fs.statSync(full).size;
+      } catch {
+        // File vanished mid-walk (build output is not required to be stable).
+      }
+    }
+  }
+  return total;
 }
 
 module.exports = {

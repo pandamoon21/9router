@@ -909,10 +909,19 @@ export class KiroExecutor extends BaseExecutor {
         } catch (error) {
           state.droppedTools = (state.droppedTools || 0) + 1;
           state.toolValidationError ||= error.message;
-          // An open string fragment means the model was cut off mid-call, not
-          // that it wrote bad JSON. Track it so finish() can retry instead of
-          // reporting a successful turn whose tool call was thrown away.
-          const truncated = tool.inputKind !== "object" && tool.inputKind !== undefined;
+          // A call the model announced but never completed is "truncated", not
+          // "malformed". Two shapes qualify, and both must be tracked so finish()
+          // can retry instead of reporting a successful turn whose tool call was
+          // thrown away:
+          //   - inputKind === "string": an open JSON fragment, cut mid-input.
+          //   - inputKind === undefined: the toolUseEvent named a tool but no
+          //     input ever followed. Kiro streams tool `input` as an OPEN object
+          //     with no close event, so a call cut off *before* its first input
+          //     fragment arrives here with nothing buffered at all -- and it is
+          //     indistinguishable from a genuinely empty call.
+          // Only a completed "object" is exempt; anything we are about to drop
+          // while the turn declares stop_reason=tool_use is a truncated call.
+          const truncated = tool.inputKind !== "object";
           if (truncated) state.truncatedTool = tool;
           console.error(
             `[Kiro] dropping unusable tool call ${tool.id} (${tool.name}): ${error.message}` +

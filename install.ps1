@@ -24,11 +24,17 @@
 .PARAMETER KeepRunning
     Do not stop running 9router instances before installing.
 
+.PARAMETER Force
+    Rebuild even when an up-to-date tarball already exists. Without it, a
+    re-run that finds a tarball newer than the source reuses it and skips the
+    5-10 minute Next.js build.
+
 .EXAMPLE
     .\install.ps1
     .\install.ps1 C:\src\9router
     .\install.ps1 pandamoon21/9router
     .\install.ps1 -BuildOnly
+    .\install.ps1 -Force
 
 .NOTES
     Never use `npm update -g 9router` on a fork install - it silently replaces
@@ -41,7 +47,9 @@ param(
 
     [switch] $BuildOnly,
 
-    [switch] $KeepRunning
+    [switch] $KeepRunning,
+
+    [switch] $Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +110,18 @@ function Get-NewestSourceWriteTime {
     # Wrap so the DateTime survives as one value: a bare `return $newest` inside
     # a loop-emitting function leaks every intermediate value into the caller.
     return ,$newest
+}
+
+function Test-TarballFresh {
+    param([System.IO.FileInfo] $Tgz, [string] $Dir)
+
+    # Boolean sibling of Test-FreshTarball: true when the tarball is at least as
+    # new as every source file, i.e. safe to reuse without rebuilding.
+    $newestSource = Get-NewestSourceWriteTime -Dir $Dir
+
+    if (-not $newestSource) { return $true }
+
+    return ($Tgz.LastWriteTimeUtc -ge $newestSource)
 }
 
 function Test-FreshTarball {
@@ -277,7 +297,21 @@ function Stop-RunningInstance {
 # ---- build + install -------------------------------------------------------
 
 function Build-Package {
-    param([string] $Dir)
+    param([string] $Dir, [switch] $Reuse)
+
+    $existing = Get-ChildItem -LiteralPath $Dir -Filter '9router-*.tgz' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    # Reuse a tarball that is already newer than every source file. This script
+    # is meant to be re-run after each edit, and the build is 5-10 minutes; when
+    # the previous run already produced a current tarball, rebuilding it from
+    # scratch is pure waste. -Force (or an absent/stale tarball) rebuilds.
+    if ($Reuse -and $existing -and (Test-TarballFresh -Tgz $existing -Dir $Dir)) {
+        Write-Step "Reusing existing build $($existing.Name) (newer than source; pass -Force to rebuild)"
+        Write-Step "Built $($existing.Name) ($([math]::Round($existing.Length / 1MB, 2)) MB)"
+        return ,$existing
+    }
 
     Write-Step 'Building (Next.js production build - this takes 5-10 min)'
 
@@ -318,15 +352,95 @@ function Install-Globally {
     # A dirty tree here is how a reinstall silently keeps stale files: npm
     # overwrites what it packages but never deletes what the last version left
     # behind. Clear it so what lands is exactly the tarball.
-    & npm uninstall -g 9router *> $null
+    #
+    # npm uninstall can fail on Windows when a previous run left the app's
+    # node_modules locked (a still-running instance, an open handle, an
+    # antivirus scan). That used to be a warning and the install continued on
+    # top of the half-removed tree, so the fresh build never really landed.
+    # Now: retry, then force-delete the leftover dir, then *verify* it is gone.
+    $uninstalled = $false
+    for ($attempt = 1; $attempt -le 2 -and -not $uninstalled; $attempt++) {
+        & npm uninstall -g 9router *> $null
+        if ($LASTEXITCODE -eq 0) { $uninstalled = $true; break }
+        Write-Warn "npm uninstall attempt $attempt failed - retrying after stopping leftover processes"
+        Stop-RunningInstance
+        Start-Sleep -Seconds 2
+    }
 
-    if ($LASTEXITCODE -ne 0) { Write-Warn 'uninstall reported an error - continuing' }
+    $globalRoot = Get-NpmGlobalRoot
+    $stalePaths = @()
+    if ($globalRoot) {
+        $stalePaths += Join-Path $globalRoot '9router'
+        $stalePaths += Join-Path $globalRoot 'node_modules/9router'
+    }
+    $stalePaths += Join-Path $env:APPDATA 'npm/node_modules/9router'
+
+    foreach ($stale in ($stalePaths | Select-Object -Unique)) {
+        if ($stale -and (Test-Path -LiteralPath $stale)) {
+            Write-Warn "removing leftover install dir $stale"
+            Remove-PathRobust -Path $stale
+        }
+    }
+
+    if (-not $uninstalled -and (Get-Command 9router -ErrorAction SilentlyContinue)) {
+        Write-Warn 'npm uninstall never reported success - proceeding only because the install dir is clear'
+    }
 
     Write-Step 'Installing globally'
 
     & npm install -g $Tgz.FullName
 
-    if ($LASTEXITCODE -ne 0) { Fail 'Global npm installation failed' }
+    if ($LASTEXITCODE -ne 0) {
+        # A locked folder during install has the same root cause as above. One
+        # retry after clearing the tree, then give up loudly rather than
+        # "succeeding" with the old build still in place.
+        Write-Warn 'Global npm installation failed - clearing the install dir and retrying once'
+        if ($globalRoot) {
+            Remove-PathRobust -Path (Join-Path $globalRoot 'node_modules/9router')
+        }
+        & npm install -g $Tgz.FullName
+        if ($LASTEXITCODE -ne 0) { Fail 'Global npm installation failed' }
+    }
+
+    # Verify the install actually landed; a silent no-op install is exactly the
+    # "build succeeded but nothing changed" symptom.
+    $installedVersion = Get-InstalledVersion
+    if ($installedVersion -eq '?') {
+        Write-Warn 'could not read the installed 9router version back from npm'
+    }
+}
+
+function Get-NpmGlobalRoot {
+    try {
+        return (& npm root -g).Trim()
+    }
+    catch {
+        return $null
+    }
+}
+
+function Remove-PathRobust {
+    param([string] $Path)
+
+    # Retry because Windows keeps a directory locked for a moment after the
+    # process holding it exits; a single Remove-Item -Recurse -Force often
+    # throws on the first try and then succeeds.
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            return $true
+        }
+        catch {
+            if (-not (Test-Path -LiteralPath $Path)) { return $true }
+            Start-Sleep -Milliseconds (500 * $attempt)
+        }
+    }
+
+    if (Test-Path -LiteralPath $Path) {
+        Write-Warn "could not remove $Path - files are still locked (is 9router running?)"
+        return $false
+    }
+    return $true
 }
 
 function Initialize-SqliteRuntime {
@@ -397,7 +511,7 @@ try {
     Initialize-Lockfile -Dir $sourceDir
 
     if ($BuildOnly) {
-        $only = Build-Package -Dir $sourceDir
+        $only = Build-Package -Dir $sourceDir -Reuse:(-not $Force)
         Write-Step "Build-only: $($only.FullName)"
         Write-Host ''
         Write-Host '    Nothing was stopped or installed.' -ForegroundColor Gray
@@ -412,7 +526,7 @@ try {
         Stop-RunningInstance
     }
 
-    $tgz = Build-Package -Dir $sourceDir
+    $tgz = Build-Package -Dir $sourceDir -Reuse:(-not $Force)
     Install-Globally -Tgz $tgz
     Initialize-SqliteRuntime -Dir $sourceDir
 

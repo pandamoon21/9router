@@ -7,6 +7,67 @@ To install a fork build, use `.\install.ps1` (Windows) or `./install.sh` — pla
 `npm install -g 9router` / `npm update -g 9router` fetches the upstream registry
 build and silently discards everything listed here.
 
+## 2026-10-02 — Windows installer: `du` noise, locked-folder uninstall, and blank rebuilds
+
+Three problems hit while running `.\install.ps1` on Windows:
+
+- **Spurious `du` error.** `cli/scripts/build-cli.js` sized the finished package
+  with `du -sh`, which does not exist on Windows. The call sat in a `try/catch`,
+  but the shell's "the term 'du' is not recognized" line is written to stderr
+  *before* the catch swallows the error, so every successful build printed a
+  scary failure. Replaced with an in-process directory walk (`directorySize`).
+- **Uninstall failed but kept going.** When a previous run left the global
+  `9router` tree locked (a still-running instance, a lingering handle, AV), `npm
+  uninstall -g 9router` exited non-zero. That was only a warning, so the install
+  continued on top of a half-removed tree and the fresh build never really
+  landed. Now the uninstall retries after stopping leftovers, force-deletes the
+  remaining `node_modules/9router` (a 4-attempt `Remove-PathRobust` that tolerates
+  Windows' delayed directory locks), and the install itself retries once against
+  a cleared directory. If it still cannot land, it fails loudly instead of
+  "succeeding" with the old build.
+- **Every re-run rebuilt from scratch.** `pack:cli` runs the full Next.js
+  production build (5-10 min) unconditionally. A re-run that finds a tarball
+  already newer than the source tree now reuses it and skips the build; pass
+  `-Force` to rebuild anyway.
+
+## 2026-10-02 — Kiro: a declared tool call whose input never arrived is retried too
+
+The 2026-09-30 fix handled a tool call whose input was **cut mid-fragment**. A
+second, adjacent field shape survived it. Claude Code on `kr/claude-opus-4.8`
+logged
+
+```
+[Kiro] dropping unusable tool call toolu_bdrk_… (Write): Kiro tool call is missing input
+```
+
+and the `Write` again silently never happened — no error, no `tool_use`, just a
+turn that closed as `finish_reason: "stop"`. Note the message: `missing input`,
+not the `valid object JSON` of a mid-fragment cut. This is a `toolUseEvent` that
+named the tool but whose `input` **never arrived at all** — Kiro streams `input`
+as an open object with no close event, so a call cut off *before its first
+fragment* reaches the router with nothing buffered.
+
+`open-sse/executors/kiro.js`:
+
+- **Truncated, not malformed.** The emit-path truncation flag was
+  `inputKind !== "object" && inputKind !== undefined`, which filed a zero-input
+  call as *complete-but-invalid* (drop quietly). It is now `inputKind !==
+  "object"`: only a finished object is exempt, and anything about to be dropped
+  while the turn declares `stop_reason=tool_use` is a truncated call.
+- The signal reaches `finish()` through `state.truncatedTool`. This mattered
+  because `emitTools()` clears `state.tools`, so `finish()`'s
+  `truncatedAndUnusable()` re-scan saw an empty map — and the retry guard inside
+  `emitTools()` only fires when the turn has **no** text, so the specific shape
+  *text + declared `tool_use` + zero-input call* fell through to a successful
+  `stop`. The repair retry now fires and the complete call reaches the client.
+
+Coverage: `tests/unit/kiro-usage-and-tool-integrity.test.js` section **F** — the
+zero-input shape with and without accompanying text, plus repair-off fast-fail.
+Both new cases fail on the pre-fix executor. The diagnostics assertion in
+`kiro-terminal-integrity.test.js` was tightened to its real invariant (no
+`tool_calls` delta ever carries the dropped call) now that the error legitimately
+names the tool in `diagnostics.truncated_tool`.
+
 ## 2026-09-30 — Kiro: a tool call cut off mid-input is retried, never reported as success
 
 Claude Code on `kr/claude-opus-4.8` logged

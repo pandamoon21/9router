@@ -308,7 +308,11 @@ describe("Kiro terminal integrity recovery", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(body).toContain("kiro_tool_call_repair_retry_failed");
-    expect(body).not.toContain('"name":"read_file"');
+    // The invalid call must never be released as a usable tool call. It now
+    // appears in the error's `diagnostics.truncated_tool` (so the drop is
+    // attributable), but no tool_calls delta may carry it to the client.
+    expect(body).not.toContain('"tool_calls"');
+    expect(body).not.toContain('"finish_reason":"tool_calls"');
   });
 
   it("repairs a non-string toolUseId before releasing the tool call", async () => {
@@ -716,7 +720,9 @@ describe("Kiro terminal integrity recovery", () => {
   it("surfaces retry HTTP failures as SSE after heartbeat commits headers", async () => {
     fetchMock
       .mockResolvedValueOnce(response([]))
-      .mockResolvedValueOnce(new Response("unauthorized", {
+      // A fresh Response per call: BaseExecutor walks endpoint fallbacks and
+      // re-reads the body, so a shared instance would hang on the second read.
+      .mockImplementation(async () => new Response("unauthorized", {
         status: 401,
         statusText: "Unauthorized"
       }));
@@ -732,7 +738,7 @@ describe("Kiro terminal integrity recovery", () => {
   it("bounds the retry HTTP error body", async () => {
     fetchMock
       .mockResolvedValueOnce(response([]))
-      .mockResolvedValueOnce(new Response(`error-start-${"x".repeat(10_000)}-error-tail`, {
+      .mockImplementation(async () => new Response(`error-start-${"x".repeat(10_000)}-error-tail`, {
         status: 401,
         statusText: "Unauthorized"
       }));

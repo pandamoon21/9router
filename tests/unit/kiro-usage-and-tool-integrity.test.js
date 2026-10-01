@@ -365,6 +365,53 @@ describe("F: a tool call cut off mid-input is retried, never reported as success
     expect(body).not.toContain('"id":"bad"');
     expect(body).toContain('"finish_reason":"tool_calls"');
   });
+
+  // Second field shape, distinct from the 77-char cut above: the toolUseEvent
+  // names the tool but NO input ever arrives. Kiro streams `input` as an open
+  // object with no close event, so a call cut off *before* its first fragment
+  // reaches the router with nothing buffered at all. It logs
+  //   dropping unusable tool call toolu_bdrk_… (Write): Kiro tool call is missing input
+  // (note: "missing input", not the "valid object JSON" of the truncated cut).
+  // This is the same failure as section F's -- the model announced a Write that
+  // never ran -- but it slipped through because the emit-path truncation flag
+  // excluded `inputKind === undefined`, and emitTools() had already cleared
+  // state.tools before finish() could re-inspect it. The retry guard in
+  // emitTools() only fires with no text, so "text + declared tool_use + zero
+  // input" fell through to a successful finish_reason "stop".
+  const ZERO_INPUT_WRITE = { toolUseId: "toolu_bdrk_01S1i2X1FVmtKtjRzQerppNs", name: "Write" };
+
+  it("retries a declared tool call whose input never arrived, even with text", async () => {
+    fetchMock
+      .mockResolvedValueOnce(response([
+        frame("assistantResponseEvent", { content: "I'll write the file." }),
+        frame("toolUseEvent", ZERO_INPUT_WRITE),
+        frame("metadataEvent", { stopReason: "tool_use" }),
+        ...METERED
+      ]))
+      .mockResolvedValueOnce(response([
+        frame("toolUseEvent", { ...ZERO_INPUT_WRITE, input: JSON.stringify({ file_path: WRITE_PATH, content: "export const x = 1;" }) }),
+        frame("metadataEvent", { stopReason: "tool_use" }),
+        ...METERED
+      ]));
+
+    const body = await (await execute()).response.text();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body).toContain('"finish_reason":"tool_calls"');
+    expect(body).toContain("export const x = 1;");
+    // Never the silent no-op: the turn must not close as a plain stop.
+    expect(body).not.toContain('"finish_reason":"stop"');
+  });
+
+  it("surfaces the failure immediately when a zero-input call cannot be repaired", async () => {
+    const body = await runNoRepair([
+      frame("assistantResponseEvent", { content: "I'll write the file." }),
+      frame("toolUseEvent", ZERO_INPUT_WRITE),
+      frame("metadataEvent", { stopReason: "tool_use" })
+    ]);
+    expect(body).toContain("invalid_kiro_tool_call");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("B: truncation after output closes as length, not as a failure", () => {
