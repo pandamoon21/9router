@@ -171,29 +171,38 @@ export function resolveKiroThinkingBudget(body, headers, model) {
   return null;
 }
 
-// Effort enums are read from the live catalog's additionalModelRequestFieldsSchema.
-// Source of truth: work/model_schemas.txt (captured 2026-09-14). Verbatim:
-//
-//   claude-opus-5    path=output_config enum=[low,medium,high,xhigh,max] default=high
-//   claude-sonnet-5  path=output_config enum=[low,medium,high,xhigh,max] default=high
-//   claude-opus-4.8  path=output_config enum=[low,medium,high,xhigh,max] default=high
-//   claude-opus-4.7  path=output_config enum=[low,medium,high,xhigh,max] default=xhigh
-//   claude-opus-4.6  path=output_config enum=[low,medium,high,max]       default=high
-//   claude-sonnet-4.6 path=output_config enum=[low,medium,high,max]     default=high
-//   gpt-5.6-{sol,terra,luna} path=reasoning enum=[none,low,medium,high,xhigh,max] default=high
-//   claude-{opus,sonnet,haiku}-4.5, claude-sonnet-4, and every non-Claude/non-GPT
-//   model: no additionalModelRequestFieldsSchema at all.
-//
-// `xhigh` and `max` are real wire values, NOT aliases for `high`. Only 4.6-class
-// models lack `xhigh`; the model id encodes which generation it is, so the gate
-// lives in resolveKiroEffortPath, not here.
+function parseClaudeVersion(model) {
+  if (typeof model !== "string") return null;
+  const normalized = model.toLowerCase().replace(/-/g, ".");
+  const match = normalized.match(/(?:^|[/.])claude(?:[/.][a-z]+)*[/.](\d+)(?:[/.](\d+))?(?:[/.]|$)/);
+  if (!match) return null;
+  return { major: Number(match[1]), minor: match[2] === undefined ? null : Number(match[2]) };
+}
+
+// True only when the id is provably a 4.6-generation Claude opus/sonnet — i.e.
+// the generation whose captured enum stops at `max` (no xhigh). An unknown model
+// is NOT treated as lacking xhigh: the fork keeps xhigh when the generation
+// cannot be determined, rather than discarding a level the caller asked for.
+function isLegacyClaude46(model) {
+  if (typeof model !== "string") return false;
+  if (!/claude[/.](?:opus|sonnet)[/.]4[/.]6(?:[/.]|$)/i.test(model.toLowerCase().replace(/-/g, "."))) {
+    return false;
+  }
+  return true;
+}
+
+// Fork patch: the captured Claude enum for opus-4.7/4.8/5 and sonnet-5 is
+// [low, medium, high, xhigh, max] — `xhigh` and `max` are real wire values, not
+// aliases for `high`. Source of truth: work/model_schemas.txt.
 const KIRO_CLAUDE_EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
+// Fork patch: the captured GPT-5.6 enum is [none, low, medium, high, xhigh, max].
+// `none` is the documented way to disable reasoning and `max` is its own top tier,
+// not an alias for xhigh. Upstream omits `none` and rewrites `max` to `xhigh`; the
+// fork keeps both real wire values. Source of truth: work/model_schemas.txt.
 const KIRO_GPT_EFFORT_LEVELS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
 
-// Models whose captured enum stops at `max` — the 4.6 generation only.
-const KIRO_CLAUDE_EFFORT_NO_XHIGH = /(?:^|[\/.])claude[/.](?:opus|sonnet)[/.]4[/.]6(?:[/.]|$)/;
-
-export function extractKiroEffortLevel(body, model = null) {
+export function extractKiroEffortLevel(body, model) {
   const effort =
     body?.output_config?.effort ??
     body?.reasoning_effort ??
@@ -203,11 +212,12 @@ export function extractKiroEffortLevel(body, model = null) {
   // Aliases the caller may use that mean "no reasoning". Claude has no wire `none`.
   if (normalized === "none" || normalized === "off" || normalized === "disabled") return null;
   if (!KIRO_CLAUDE_EFFORT_LEVELS.has(normalized)) return null;
-  // xhigh postdates the 4.6 models; anything else on the Claude path advertises it.
-  // Model ids arrive dash-separated (claude-opus-4.6) while the pattern uses dots.
-  if (normalized === "xhigh" && typeof model === "string") {
-    if (KIRO_CLAUDE_EFFORT_NO_XHIGH.test(model.toLowerCase().replace(/-/g, "."))) return null;
-  }
+  // Fork patch: hold the 4.6 generation (low|medium|high|max) to its narrower
+  // enum — `xhigh` postdates it, so drop it rather than silently clamping to a
+  // tier the caller did not ask for. `max` stays valid, 4.7+ forward `xhigh`, and
+  // an unknown/absent model id keeps `xhigh` (the generation cannot be proven to
+  // be 4.6, so do not discard a level the caller explicitly asked for).
+  if (normalized === "xhigh" && typeof model === "string" && isLegacyClaude46(model)) return null;
   return normalized;
 }
 
@@ -222,7 +232,7 @@ function extractKiroGptEffortLevel(body) {
   return KIRO_GPT_EFFORT_LEVELS.has(normalized) ? normalized : null;
 }
 
-export function buildKiroAdditionalModelRequestFields(body, effortPath = "output_config", model = null) {
+export function buildKiroAdditionalModelRequestFields(body, effortPath = "output_config", model) {
   const effort = effortPath === "reasoning"
     ? extractKiroGptEffortLevel(body)
     : extractKiroEffortLevel(body, model);
@@ -245,11 +255,9 @@ export function resolveKiroEffortPath(model) {
     return "reasoning";
   }
   if (!normalized.includes("claude")) return null;
-  const match = normalized.match(/(?:^|[/.])claude(?:[/.][a-z]+)*[/.](\d+)(?:[/.](\d+))?(?:[/.]|$)/);
-  if (!match) return null;
-  const [, majorText, minorText] = match;
-  const major = Number(majorText);
-  const minor = minorText === undefined ? null : Number(minorText);
+  const v = parseClaudeVersion(model);
+  if (!v) return null;
+  const { major, minor } = v;
   const dateSuffixMinor = minor !== null && minor >= 1000;
   // Kiro rejected additionalModelRequestFields on legacy 4.5 models in live smoke.
   // Default future Claude/Kiro models to supported so new model releases do not

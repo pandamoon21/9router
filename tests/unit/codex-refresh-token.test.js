@@ -148,7 +148,10 @@ describe("Codex Refresh Token", () => {
       const { getRefreshLeadMs } = await import("../../open-sse/services/tokenRefresh.js");
 
       // Synced with CLIProxyAPI refresh_registry
-      expect(getRefreshLeadMs("codex")).toBe(5 * 24 * 60 * 60 * 1000);   // 5 days
+      // codex: 10min, not 5 days. OpenAI rotates the refresh token on every
+      // refresh and revokes the session on reuse, so refreshing days before an
+      // ~1h access token expires caused a login-out loop (upstream 0bc7f86e).
+      expect(getRefreshLeadMs("codex")).toBe(10 * 60 * 1000);            // 10 minutes
       expect(getRefreshLeadMs("claude")).toBe(4 * 60 * 60 * 1000);       // 4 hours
       expect(getRefreshLeadMs("iflow")).toBe(24 * 60 * 60 * 1000);       // 24 hours
       expect(getRefreshLeadMs("kimi")).toBe(5 * 60 * 1000);              // 5 minutes

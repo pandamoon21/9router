@@ -1,20 +1,6 @@
 tests/translator/bugs-claudeCode-context.test.js :: Claude Code CLI context → OpenAI tool_result image block is preserved
 tests/translator/bugs-gemini-cursor-commandcode.test.js :: OpenAI → CommandCode image content is preserved as native CommandCode image blocks
 tests/translator/bugs-openai-bridge.test.js :: bug: Claude → OpenAI bridge data loss tool_result with image block is not turned into raw JSON / dropped
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) agnes → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) atria → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) bai → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) claude → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) cline → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) clinepass → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) dahl → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) kimi → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildHeaders (default executor providers) tokenharbor → headers (apiKey / oauth)
-tests/translator/golden-url-header.test.js :: GOLDEN buildUrl (default executor providers) agnes → url (stream + non-stream)
-tests/translator/golden-url-header.test.js :: GOLDEN buildUrl (default executor providers) atria → url (stream + non-stream)
-tests/translator/golden-url-header.test.js :: GOLDEN buildUrl (default executor providers) bai → url (stream + non-stream)
-tests/translator/golden-url-header.test.js :: GOLDEN buildUrl (default executor providers) dahl → url (stream + non-stream)
-tests/translator/golden-url-header.test.js :: GOLDEN buildUrl (default executor providers) tokenharbor → url (stream + non-stream)
 tests/translator/thinking-unified.test.js :: applyThinking per provider format GLM-5.2 also gets reasoning_effort (supported from 5.2 onward)
 tests/unit/claude-header-forwarding.test.js :: proxyAwareFetch — api.anthropic.com routing routes api.anthropic.com to gotScraping (non-streaming) and returns ok response
 tests/unit/codex-image-fetch.test.js :: CodexExecutor image handling execute() prefetches images before sending to upstream
@@ -36,8 +22,6 @@ tests/unit/image-generation.test.js :: handleImageGenerationCore generates image
 tests/unit/image-generation.test.js :: handleImageGenerationCore generates image with Codex gpt-5.6-luna-image using current Codex version header
 tests/unit/image-generation.test.js :: handleImageGenerationCore generates image with Codex gpt-5.6-sol-image using current Codex version header
 tests/unit/image-generation.test.js :: handleImageGenerationCore generates image with Codex gpt-5.6-terra-image using current Codex version header
-tests/unit/kiro-terminal-integrity.test.js :: Kiro terminal integrity recovery bounds the retry HTTP error body
-tests/unit/kiro-terminal-integrity.test.js :: Kiro terminal integrity recovery surfaces retry HTTP failures as SSE after heartbeat commits headers
 tests/unit/mimo-free.live.test.js :: MiMo Free anti-abuse gate (live) chat WITH Chrome User-Agent → 200
 tests/unit/model-routing.test.js :: model routing keeps built-in provider aliases ahead of compatible node prefixes
 tests/unit/oauth-cursor-auto-import.test.js :: GET /api/oauth/cursor/auto-import extracts tokens using exact keys
