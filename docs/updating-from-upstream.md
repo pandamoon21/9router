@@ -364,20 +364,38 @@ npx vitest run translator/claude-kiro-direct.test.js translator/golden-request.t
 
 ## 9. Build & install sanity check
 
+Pick the runner that matches how Node is on *your* PATH — the two shell
+families have different environments on Windows:
+
 ```bash
-# Build-only check (no install, no shutdown). Windows:
-#   .\install.ps1 -BuildOnly
-# Linux/macOS/Git Bash:
+# --- Windows (PowerShell) — PREFERRED on Windows; Node is on the Windows PATH ---
+powershell -NoProfile -ExecutionPolicy Bypass -File ./install.ps1 -BuildOnly
+
+# --- Linux / macOS — native bash, Node on PATH ---
 ./install.sh --build-only
 
+# --- Windows via Git Bash: bash resolves to WSL2 here, which usually has NO
+#     `node` on PATH → "./install.sh --build-only" fails with "node not found".
+#     Either use install.ps1 above, or add Node to WSL and then: ---
+bash ./install.sh --build-only
+
 # Full fork install (stops running instances, installs the fork build):
-./install.sh                 # or: .\install.ps1
+./install.sh                 # Linux/macOS   |   .\install.ps1   # Windows
 ./install.sh --keep-running  # if you don't want it stopped
 ./install.sh pandamoon21/9router   # clone + build from the fork remote
 ```
 
 - **Never** `npm update -g 9router` — it replaces the fork with upstream.
 - Windows: `.ps1` is CRLF, `.sh` must stay LF (enforced by `.gitattributes`).
+- **`./install.sh` on Windows is a trap:** this shell's `bash` may be WSL2
+  (`uname -a` → `microsoft-standard-WSL2`), which does **not** inherit the
+  Windows `node`. Symptom: exit 126 *"not a valid Win32 application"* (shell
+  can't exec the shebang) or *"node not found in PATH"* (WSL missing Node). Use
+  `install.ps1` on Windows; use `install.sh` only where `node -v` works in that
+  same shell.
+- `-BuildOnly` / `--build-only` builds the tarball and stops — nothing is
+  installed or stopped. Ideal for CI and for verifying a merge without touching
+  a running instance.
 
 ---
 
@@ -405,9 +423,12 @@ npx vitest run translator/claude-kiro-direct.test.js translator/golden-request.t
 | `Error: Your local changes would be overwritten` | dirty tree | `git stash` or commit before merging |
 | Conflict markers left in a file | incomplete resolve | `grep -rn '<<<<<<<\|>>>>>>>' <file>`; re-edit; `git add` |
 | Kiro requests gain a top-level `model` | `chatCore.js` invariant lost | re-apply §6 exclusion |
-| CodeBuddy returns HTTP 400 `code 11128` | agent-identity filter disabled/removed | confirm `open-sse/services/codebuddy/identity.js` runs; `CODEBUDDY_CN_AGENT_FILTER` defaults ON |
+| CodeBuddy returns HTTP 400 `code 11128` | agent-identity filter disabled/removed | confirm the filter is on: `open-sse/executors/codebuddy-cn.js` sets `FILTER_ENABLED = process.env.CODEBUDDY_CN_AGENT_FILTER !== "0"` (defaults ON) and calls `open-sse/services/codebuddy/identity.js` to neutralize branded prompts |
 | Tool call `Write` silently never happens on Kiro | never-arrived input dropped instead of retried | restore the `inputKind !== "object"` truncation rule (§5.3) |
 | Tests "all red" after merge | judging by raw run | run the gate `verify-no-regression.mjs` instead |
+| `git merge upstream/master` says **"Already up to date."** | upstream has no commits newer than the last merged release — nothing to do | this is a valid no-op; confirm with `git rev-list --count HEAD..upstream/master` (expect `0`) and stop. Do **not** fabricate a merge |
+| `./install.sh` → exit 126 / "not a valid Win32 application" | Windows shell cannot execute a shebang script directly | run it through bash: `bash ./install.sh --build-only` (Git Bash / WSL), or use `.\install.ps1` on Windows |
+| `git fetch upstream --tags --prune` prints nothing | already fetched; refs unchanged | verify with `git rev-parse upstream/master` vs the last merged hash |
 | `du: command not found` during CLI build | old `build-cli.js` restored | keep the fork's portable `directorySize` walk |
 | Dashboard shows "update to vX" and installs upstream | `Sidebar.js`/`config.js` fork patch lost | re-apply §5.5 |
 

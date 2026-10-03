@@ -7,6 +7,37 @@ To install a fork build, use `.\install.ps1` (Windows) or `./install.sh` — pla
 `npm install -g 9router` / `npm update -g 9router` fetches the upstream registry
 build and silently discards everything listed here.
 
+## 2026-10-03 — Upstream merge runbook for AI agents (`docs/updating-from-upstream.md`)
+
+Add a single-file, self-contained runbook so an AI agent (or maintainer) can
+merge `decolua/9router` releases into this fork **without losing the fork
+patches**. It documents the repo topology, the full patch surface (40
+modified-in-place + 27 fork-only files) with per-file intent, a clean-tree fast
+lane, the merge-not-rebase policy, a per-file conflict playbook, post-merge
+invariant re-checks, the regression gate, a release checklist, troubleshooting,
+and a §13 drift audit that flags fork files the guide does not yet cover.
+
+The runbook was then **executed end-to-end as a validation pass** against
+upstream v0.5.95 (`a99cf572`):
+
+- Preflight clean; `git fetch upstream --tags --prune` → upstream already at the
+  last merged release, so `git merge upstream/master` returned **"Already up to
+  date"** (a valid no-op — there was nothing new to merge).
+- §6 invariants re-asserted on the tree: Kiro excluded from the top-level
+  `model` field (`chatCore.js`), `KIRO_*_EFFORT_LEVELS` present, CodeBuddy
+  telemetry wired, object-based CodeBuddy refresh signature, fork changelog URL
+  in `config.js`, version synced at `0.5.95` in both `package.json` files.
+- §8 gate **PASS** — `verify-no-regression.mjs`: 68 failures, all in the
+  known-fails allowlist; plus 241/241 targeted fork-risk tests green.
+- §9 build-only **PASS** — `9router-0.5.95.tgz` built via `install.ps1`.
+
+Three gaps the dry run exposed were folded back into the runbook: the
+CodeBuddy filter is enforced in `open-sse/executors/codebuddy-cn.js` (not
+`identity.js`); a no-op "Already up to date" merge is now a documented
+outcome; and §9 now spells out the Windows trap where this shell's `bash` is
+WSL2 and lacks the Windows `node`, so `install.ps1` is the correct Windows
+runner.
+
 ## 2026-10-02 — Windows installer: `du` noise, locked-folder uninstall, and blank rebuilds
 
 Three problems hit while running `.\install.ps1` on Windows:
