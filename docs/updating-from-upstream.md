@@ -12,6 +12,13 @@
 > modification to a file upstream also owns) that is **not yet listed in §2**,
 > an AI agent MUST update this guide **in the same commit / PR as that patch**.
 > Concretely, for every new `FORK_PATCH`:
+> 0. **Append a dated entry to `CHANGELOG.md`** under the
+>    `# Fork changes (pandamoon21)` section (top of the file), in the fork's
+>    existing style: `## YYYY-MM-DD — <short title>`, then *what changed* and
+>    *why*. This is the user-visible record (the dashboard changelog is pointed
+>    at the fork — see §5.5), so it MUST land **in the same commit as the
+>    patch**, never "later". Follow the fork convention: patch commits are
+>    `fix(...)`/`feat(...)`, and the CHANGELOG entry describes the same change.
 > 1. Add the file to the **Category A** (modified-in-place) or **Category B**
 >    (fork-only) table in §2, with a one-line intent.
 > 2. If the patch has a merge-fragile invariant, add a resolution rule to
@@ -495,12 +502,25 @@ PY
 
 Agent checklist when drift is found (do **not** leave it for later):
 
+- [ ] **`CHANGELOG.md` has a dated fork entry** for the new patch (top section),
+      added in the **same commit** as the patch — not retroactively.
 - [ ] Every undocumented file is added to §2 (Category **A** or **B**) with intent.
 - [ ] Fragile invariants get a §5 conflict rule **and** a §6 post-merge re-check.
 - [ ] New failure modes get a §11 troubleshooting row.
 - [ ] §10 release checklist still covers the patch's install/verify path.
 - [ ] Stale facts refreshed: `package.json`/`cli/package.json` version,
       "latest upstream merged", ahead/behind counts, commit hashes.
+
+Quick CHANGELOG check (does every recent fork patch have an entry?):
+
+```bash
+# Fork commits that are NOT upstream merges, newest first
+git log --oneline --no-merges upstream/master..HEAD | head -20
+# Entries at the top of the fork section
+sed -n '1,60p' CHANGELOG.md | grep -n '^## '
+# Rule of thumb: a patch without a matching `## <date> — <title>` entry above
+# the first upstream release note is a MISSING changelog entry.
+```
 
 > **Rule of thumb:** a fork patch that is *not* written down in this guide is a
 > patch the next merge is allowed to lose. Document it in the same commit that
