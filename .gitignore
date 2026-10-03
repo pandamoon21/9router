@@ -53,6 +53,7 @@ docs/*
 !docs/ARCHITECTURE.md
 !docs/codebuddy-cn-system-prompt-results.md
 !docs/refreshing-codebuddy-models.md
+!docs/updating-from-upstream.md
 test/*
 open-sse/test/*
 RM.vn.md
