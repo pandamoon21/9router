@@ -48,7 +48,7 @@
   commits from `upstream/master`. There is **no rebase workflow** — fork patches
   keep their original commit ids so old merges never need replaying.
 - Last upstream merged: **v0.5.95** (`a99cf572`). The fork is currently
-  `47` commits ahead of and `0` behind `upstream/master`.
+  `50` commits ahead of and `0` behind `upstream/master`.
 
 Verify all of the above at any time:
 
