@@ -43,19 +43,19 @@
 
 - Working branch: **`master`** (tracks `origin/master`).
 - Version lives in **two** places and must stay in sync: root `package.json`
-  `"version"` and `cli/package.json` `"version"`. Today both read `0.5.95`.
+  `"version"` and `cli/package.json` `"version"`. Today both read `0.5.99`.
 - The fork's changes are recorded as *normal commits on `master`* plus merge
   commits from `upstream/master`. There is **no rebase workflow** — fork patches
   keep their original commit ids so old merges never need replaying.
-- Last upstream merged: **v0.5.95** (`a99cf572`). The fork is currently
-  `50` commits ahead of and `0` behind `upstream/master`.
+- Last upstream merged: **v0.5.99** (`ce4460ef`, 2026-10-08). The fork is
+  currently `53` commits ahead of and `0` behind `upstream/master`.
 
 Verify all of the above at any time:
 
 ```bash
 git remote -v
 git rev-parse --abbrev-ref HEAD            # master
-git rev-list --left-right --count upstream/master...HEAD   # -> "0    47"
+git rev-list --left-right --count upstream/master...HEAD   # -> "0    53"
 grep '"version"' package.json cli/package.json
 ```
 
@@ -95,6 +95,7 @@ merges are almost always clean).
 | `Dockerfile` | Drop the C++ toolchain; leaner reproducible image |
 | `cli/scripts/build-cli.js` | Portable package-size walk (no `du -sh`, which breaks Windows) |
 | `.env.example`, `.gitignore` | Fork-only knobs (`CODEBUDDY_CN_AGENT_FILTER`) + ignored scratch |
+| `package.json` | Upstream-owned, but fork-relevant: `@aws-sdk/credential-providers` sits in `optionalDependencies` and is imported lazily by `open-sse/shared/awsCredentials.js` — **run `npm install` after any merge that touches it**, or the Next build fails with `Module not found: Can't resolve '@aws-sdk/credential-providers'` |
 | `tests/**` | Fork regression tests (see §8) |
 
 ### B. Fork-only new files — safe, never edited by upstream
@@ -114,6 +115,14 @@ scripts/verify-codebuddy-tools.mjs           scripts/_regen-known-fails.mjs
 tests/translator/kiro-cli-parity-*.test.js   tests/unit/codebuddy-*.test.js
 tests/unit/kiro-no-top-level-model.test.js
 ```
+
+**Gitignored, not committed** (`.gitignore`): `_probe_out/`, `_probe_*.py`,
+`__pycache__/`, `.omc/`, and
+`tests/translator/__snapshots__/golden-url-header.test.js.snap` — upstream
+deleted that snapshot in `2203cd8f` but the test still calls
+`toMatchSnapshot()`, so vitest rewrites it on every run. Because it is not
+tracked, a merge that touches provider registries makes `golden-url-header`
+report "regressions" that are really just stale local snapshot content; see §8.
 
 Quickly regenerate these two lists yourself:
 
@@ -166,7 +175,7 @@ git push origin master
   the message). Use `git fetch` + `git merge` so you can inspect first.
 - Prefer a **single merge commit per upstream release**. The fork's history shows
   exactly this pattern (`v0.5.65`, `v0.5.69`, `v0.5.75`, `v0.5.81`, `v0.5.85`,
-  `v0.5.91`, `v0.5.95`).
+  `v0.5.91`, `v0.5.95`, `v0.5.99`).
 - Enable **rerere** once per clone so repeated conflict resolutions are reused:
 
   ```bash
@@ -367,6 +376,37 @@ npx vitest run unit/codebuddy-*.test.js
 npx vitest run translator/claude-kiro-direct.test.js translator/golden-request.test.js
 ```
 
+#### Snapshot drift from newly added providers (`golden-url-header`)
+
+`tests/translator/golden-url-header.test.js` enumerates **every** `PROVIDERS`
+entry and calls `toMatchSnapshot()`. When upstream adds providers, the gate
+reports pass→fail for `GOLDEN … → url/headers` entries that are **new snapshot
+keys, not regressions**. Its snapshot file is gitignored (see §2 B), so this is
+expected churn. Fix it with:
+
+```bash
+cd tests && npx vitest run translator/golden-url-header.test.js -u   # writes/updates the .snap
+cd tests && npx vitest run translator/golden-url-header.test.js      # verify stable, no -u
+```
+
+> Do **not** `rm` the `.snap` and re-run without `-u` — every case reports as
+> "148 failed" instead of writing fresh baselines. `-u` is what writes them.
+
+If a provider builds headers with a **random id** (e.g. minimax-code's
+`X-Mavis-Session-Id`, a `randomUUID()` from `open-sse/executors/default.js`),
+the snapshot is not reproducible until the test's `sanitize()` helper scrubs it
+— that is exactly the class of fix to add alongside the `-u` regeneration, or
+the entry flips back to failing on the next run.
+
+#### Upstream changing tested behavior without updating the test
+
+Upstream occasionally corrects a value and only updates *one* of the tests that
+pinned it (v0.5.99: `*glm-5.3*` context window 200k → 1M in `0f7f6e72`, which
+updated `glm53-context-window.test.js` but not the second assertion in
+`combo-caps-resolver.test.js`). Treat these as stale expectations, confirm the
+new value against the changed source, and update the assertion — with a comment
+naming the upstream commit.
+
 ---
 
 ## 9. Build & install sanity check
@@ -433,6 +473,8 @@ bash ./install.sh --build-only
 | CodeBuddy returns HTTP 400 `code 11128` | agent-identity filter disabled/removed | confirm the filter is on: `open-sse/executors/codebuddy-cn.js` sets `FILTER_ENABLED = process.env.CODEBUDDY_CN_AGENT_FILTER !== "0"` (defaults ON) and calls `open-sse/services/codebuddy/identity.js` to neutralize branded prompts |
 | Tool call `Write` silently never happens on Kiro | never-arrived input dropped instead of retried | restore the `inputKind !== "object"` truncation rule (§5.3) |
 | Tests "all red" after merge | judging by raw run | run the gate `verify-no-regression.mjs` instead |
+| Build fails: `Module not found: Can't resolve '@aws-sdk/credential-providers'` | a merge brought a provider (Bedrock) whose lazily-imported optional dependency is not installed locally | `npm install` at the repo root, then rebuild (§9). The dep is declared in `optionalDependencies` upstream — never remove it |
+| Gate reports pass→fail in `golden-url-header.test.js` for providers that were just added | the test snapshots every `PROVIDERS` entry and its `.snap` is gitignored, so new providers have no baseline | regenerate with `npx vitest run translator/golden-url-header.test.js -u` (see §8); if a provider uses a random id in its headers, scrub it in the test's `sanitize()` too |
 | `git merge upstream/master` says **"Already up to date."** | upstream has no commits newer than the last merged release — nothing to do | this is a valid no-op; confirm with `git rev-list --count HEAD..upstream/master` (expect `0`) and stop. Do **not** fabricate a merge |
 | `./install.sh` → exit 126 / "not a valid Win32 application" | Windows shell cannot execute a shebang script directly | run it through bash: `bash ./install.sh --build-only` (Git Bash / WSL), or use `.\install.ps1` on Windows |
 | `git fetch upstream --tags --prune` prints nothing | already fetched; refs unchanged | verify with `git rev-parse upstream/master` vs the last merged hash |
