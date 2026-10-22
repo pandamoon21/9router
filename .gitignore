@@ -53,6 +53,7 @@ docs/*
 !docs/ARCHITECTURE.md
 !docs/codebuddy-cn-system-prompt-results.md
 !docs/codebuddy-gateway-fingerprint.md
+!docs/codebuddy-credential-migration.md
 !docs/refreshing-codebuddy-models.md
 !docs/updating-from-upstream.md
 test/*
