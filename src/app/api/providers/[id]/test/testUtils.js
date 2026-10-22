@@ -362,9 +362,179 @@ function isTokenExpired(connection) {
   return shouldRefreshCredentials(connection.provider, connection);
 }
 
+// ─── CodeBuddy token-pair probe ──────────────────────────────────────────────
+//
+// `tokenExists: true` above only proves a string is stored, so a dead refresh
+// token (Tencent 12153) looked identical to a working one in the dashboard.
+// Exchange the refresh token for real and report which half of the pair is
+// alive; without this the UI can only say "Token invalid or revoked" after a
+// chat fails.
+const CODEBUDDY_REFRESH_URLS = {
+  "codebuddy-cn": "https://copilot.tencent.com/v2/plugin/auth/token/refresh",
+  "codebuddy-intl": "https://www.codebuddy.ai/v2/plugin/auth/token/refresh",
+};
+const CODEBUDDY_REFRESH_DOMAINS = {
+  "codebuddy-cn": "copilot.tencent.com",
+  "codebuddy-intl": "www.codebuddy.ai",
+};
+
+function accessTokenExpiryState(connection) {
+  const expiresAt = connection.expiresAt ? new Date(connection.expiresAt).getTime() : null;
+  if (!expiresAt || Number.isNaN(expiresAt)) return "unknown";
+  return expiresAt > Date.now() ? "alive" : "expired";
+}
+
+export async function probeCodebuddyTokenPair(connection, { forceRefresh = true } = {}) {
+  const refreshUrl = CODEBUDDY_REFRESH_URLS[connection.provider];
+  if (!refreshUrl) return null;
+
+  const refreshToken = connection.refreshToken;
+  const accessState = accessTokenExpiryState(connection);
+  const refreshExpiresAt = connection.providerSpecificData?.refreshExpiresAt;
+  const refreshExpiresMs = typeof refreshExpiresAt === "number" ? refreshExpiresAt : Date.parse(refreshExpiresAt || "");
+  const knownRefreshExpired = Number.isFinite(refreshExpiresMs) && refreshExpiresMs <= Date.now();
+
+  const base = {
+    accessTokenState: accessState,
+    refreshTokenState: refreshToken ? "unknown" : "missing",
+    refreshExpiresAt: Number.isFinite(refreshExpiresMs) ? new Date(refreshExpiresMs).toISOString() : null,
+  };
+
+  if (!refreshToken) {
+    return {
+      ...base,
+      valid: false,
+      error: "No refresh token stored — the access token cannot be renewed. Add the token pair (access + refresh).",
+      refreshed: false,
+    };
+  }
+
+  if (knownRefreshExpired) {
+    return {
+      ...base,
+      refreshTokenState: "expired",
+      valid: false,
+      error: `Refresh token expired on ${new Date(refreshExpiresMs).toISOString()} — sign in again or paste a new token pair.`,
+      refreshed: false,
+    };
+  }
+
+  if (!forceRefresh && accessState === "alive") {
+    return { ...base, refreshTokenState: "alive", valid: true, error: null, refreshed: false, newTokens: null };
+  }
+
+  let response;
+  try {
+    response = await fetch(refreshUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": connection.provider === "codebuddy-intl"
+          ? "IDE/2.172.1 CodeBuddy/2.172.1"
+          : "CLI/2.172.1 CodeBuddy/2.172.1",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Domain": CODEBUDDY_REFRESH_DOMAINS[connection.provider],
+        "X-Refresh-Token": refreshToken,
+        "X-Auth-Refresh-Source": "plugin",
+        "X-Product": "SaaS",
+        ...(connection.accessToken ? { Authorization: `Bearer ${connection.accessToken}` } : {}),
+      },
+      body: "{}",
+    });
+  } catch (error) {
+    return {
+      ...base,
+      refreshTokenState: "unverified",
+      valid: false,
+      error: `Could not reach the refresh endpoint (${error?.message || "network error"}). The stored token has not been judged.`,
+      refreshed: false,
+    };
+  }
+
+  const text = await response.text().catch(() => "");
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+
+  const dead = response.status === 401 || response.status === 403
+    || /12153|12001|token format error/i.test(text);
+
+  if (dead) {
+    return {
+      ...base,
+      refreshTokenState: "revoked",
+      httpStatus: response.status,
+      valid: false,
+      error: payload?.msg
+        ? `Refresh token rejected (${payload.code ?? response.status}): ${payload.msg}`
+        : `Refresh token rejected (HTTP ${response.status}) — sign in again or paste a new token pair.`,
+      refreshed: false,
+    };
+  }
+
+  if (!response.ok) {
+    return {
+      ...base,
+      refreshTokenState: "unverified",
+      httpStatus: response.status,
+      valid: false,
+      error: `Refresh endpoint returned HTTP ${response.status} — token state unknown, try again later.`,
+      refreshed: false,
+    };
+  }
+
+  const data = payload?.data;
+  if (payload?.code !== 0 || !data?.accessToken) {
+    return {
+      ...base,
+      refreshTokenState: "unverified",
+      httpStatus: response.status,
+      valid: false,
+      error: payload?.msg
+        ? `Refresh failed (${payload.code}): ${payload.msg}`
+        : "Refresh endpoint returned no access token.",
+      refreshed: false,
+    };
+  }
+
+  return {
+    ...base,
+    refreshTokenState: "alive",
+    accessTokenState: "alive",
+    httpStatus: response.status,
+    valid: true,
+    error: null,
+    refreshed: true,
+    newTokens: {
+      accessToken: data.accessToken,
+      refreshToken: data.refreshToken || refreshToken,
+      expiresIn: data.expiresIn,
+      refreshTokenExpiresAt: data.refreshExpiresIn ? Date.now() + data.refreshExpiresIn * 1000 : undefined,
+    },
+  };
+}
+
 async function testOAuthConnection(connection, effectiveProxy = null) {
   const config = OAUTH_TEST_CONFIG[connection.provider];
   if (!config) return { valid: false, error: "Provider test not supported", refreshed: false };
+
+  // CodeBuddy stores a JWT pair; "token exists" is not a health check, so probe
+  // the refresh endpoint and report which half of the pair is still alive.
+  if (CODEBUDDY_REFRESH_URLS[connection.provider]) {
+    const probe = await probeCodebuddyTokenPair(connection);
+    return {
+      valid: probe.valid,
+      error: probe.error,
+      refreshed: probe.refreshed,
+      newTokens: probe.newTokens,
+      tokenState: {
+        accessToken: probe.accessTokenState,
+        refreshToken: probe.refreshTokenState,
+        refreshExpiresAt: probe.refreshExpiresAt,
+      },
+    };
+  }
+
   if (!connection.accessToken) return { valid: false, error: "No access token", refreshed: false };
 
   // Cursor uses protobuf API - can only verify token exists, not test endpoint
@@ -981,9 +1151,25 @@ export async function testSingleConnection(id) {
         ...result.newTokens.providerSpecificData,
       };
     }
+    // Rotated refresh-token lifetime (CodeBuddy `refreshExpiresIn`) lives beside
+    // the connection so the dashboard can say when the pair stops working.
+    if (result.newTokens.refreshTokenExpiresAt) {
+      updateData.providerSpecificData = {
+        ...(updateData.providerSpecificData || connection.providerSpecificData || {}),
+        refreshExpiresAt: result.newTokens.refreshTokenExpiresAt,
+      };
+    }
+    if (result.newTokens.refreshToken) updateData.lastRefreshAt = new Date().toISOString();
   }
 
   await updateProviderConnection(id, updateData);
 
-  return { valid: result.valid, error: result.error, refreshed: !!result.refreshed, latencyMs, testedAt: new Date().toISOString() };
+  return {
+    valid: result.valid,
+    error: result.error,
+    refreshed: !!result.refreshed,
+    latencyMs,
+    testedAt: new Date().toISOString(),
+    ...(result.tokenState ? { tokenState: result.tokenState } : {}),
+  };
 }

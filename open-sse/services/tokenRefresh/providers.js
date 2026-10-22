@@ -510,123 +510,130 @@ export async function refreshCopilotToken(githubAccessToken, log) {
   }, log);
 }
 
-// CodeBuddy (Tencent) refresh — POST /v2/plugin/auth/token/refresh with the
-// refresh token carried in the X-Refresh-Token header (not a form body),
-// matching the official CodeBuddy CLI. Response: { code: 0, data: <token> }.
-export async function refreshCodebuddyToken(credentials, log) {
+// ─── CodeBuddy (Tencent) token refresh ───────────────────────────────────────
+//
+// `POST {endpoint}/v2/plugin/auth/token/refresh` with the refresh token in the
+// `X-Refresh-Token` header (never a form/JSON grant), matching the CodeBuddy
+// Code CLI's `refreshSession`. Response: `{ code: 0, msg, data: <token> }`.
+//
+// Tencent signals a dead refresh token with an HTTP 401/403 plus a body code of
+// 12153 (`refresh token failed`) or a nested `10000:token format error`. The CLI
+// maps exactly that to `UnauthorizedError` and does NOT retry it — a rejected
+// refresh token means the session is over. 9router's generic
+// `classifyOAuthRefreshError` only recognises OAuth2's `invalid_grant` vocabulary,
+// so a 12153 used to look like a transient failure: every later request retried
+// the refresh instead of marking the connection as needing re-authentication.
+
+const CODEBUDDY_REFRESH_DEAD_MARKERS = [
+  "12153",            // refresh token failed
+  "12001",            // refresh token not found / expired on some regions
+  "token format error", // nested `10000:token format error`
+];
+
+function isCodebuddyRefreshDead(status, bodyText) {
+  if (status === 401 || status === 403) return true;
+  const text = String(bodyText || "").toLowerCase();
+  return CODEBUDDY_REFRESH_DEAD_MARKERS.some((marker) => text.includes(marker));
+}
+
+async function refreshCodebuddyProvider(providerId, domain, credentials, log) {
   const refreshToken = typeof credentials === "string" ? credentials : credentials?.refreshToken;
   const oldAccessToken = typeof credentials === "object" && credentials ? credentials.accessToken : null;
+  if (!refreshToken) return null;
+
   let uid = null;
   if (oldAccessToken) {
     try { uid = extractCodebuddyUid(oldAccessToken); } catch {}
   }
-  return dedupRefresh("codebuddy-cn", refreshToken, async () => {
-    const oauth = PROVIDER_OAUTH["codebuddy-cn"] || {};
-    const response = await fetch(oauth.refreshUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent": oauth.userAgent,
-        "X-Requested-With": "XMLHttpRequest",
-        "X-Domain": "copilot.tencent.com",
-        "X-Refresh-Token": refreshToken,
-        "X-Auth-Refresh-Source": "plugin",
-        "X-Product": "SaaS",
-        ...(oldAccessToken ? { Authorization: `Bearer ${oldAccessToken}` } : {}),
-        ...(uid ? { "X-User-Id": uid } : {}),
-      },
-      body: "{}",
-    });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      log?.error?.("TOKEN_REFRESH", "Failed to refresh CodeBuddy token", {
-        status: response.status,
-        error: errorText,
+  return dedupRefresh(providerId, refreshToken, async () => {
+    const oauth = PROVIDER_OAUTH[providerId] || {};
+    let response;
+    try {
+      response = await fetch(oauth.refreshUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": oauth.userAgent,
+          "X-Requested-With": "XMLHttpRequest",
+          "X-Domain": domain,
+          "X-Refresh-Token": refreshToken,
+          "X-Auth-Refresh-Source": "plugin",
+          "X-Product": "SaaS",
+          ...(oldAccessToken ? { Authorization: `Bearer ${oldAccessToken}` } : {}),
+          ...(uid ? { "X-User-Id": uid } : {}),
+        },
+        body: "{}",
+      });
+    } catch (error) {
+      // Network failure says nothing about the token — let the caller retry.
+      log?.warn?.("TOKEN_REFRESH", `CodeBuddy refresh request failed (${providerId})`, {
+        error: error?.message || String(error),
       });
       return null;
     }
 
-    const data = await response.json();
-    if (data.code !== 0 || !data.data?.accessToken) {
-      log?.error?.("TOKEN_REFRESH", "CodeBuddy token refresh returned no token", {
-        code: data.code,
-        msg: data.msg,
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      const dead = isCodebuddyRefreshDead(response.status, errorText);
+      log?.error?.("TOKEN_REFRESH", "Failed to refresh CodeBuddy token", {
+        provider: providerId,
+        status: response.status,
+        error: errorText,
+        ...(dead ? { permanent: true } : {}),
       });
-      return null;
+      // `invalid_grant` is 9router's "this credential needs a fresh login" marker
+      // (isUnrecoverableRefreshError), so the account stops being retried.
+      return dead ? { error: "invalid_grant" } : null;
+    }
+
+    const data = await response.json().catch(() => null);
+    if (data?.code !== 0 || !data?.data?.accessToken) {
+      const dead = isCodebuddyRefreshDead(response.status, JSON.stringify(data || {}));
+      log?.error?.("TOKEN_REFRESH", "CodeBuddy token refresh returned no token", {
+        provider: providerId,
+        code: data?.code,
+        msg: data?.msg,
+        ...(dead ? { permanent: true } : {}),
+      });
+      return dead ? { error: "invalid_grant" } : null;
     }
 
     log?.info?.("TOKEN_REFRESH", "Successfully refreshed CodeBuddy token", {
+      provider: providerId,
       hasNewAccessToken: !!data.data.accessToken,
       hasNewRefreshToken: !!data.data.refreshToken,
       expiresIn: data.data.expiresIn,
+      refreshExpiresIn: data.data.refreshExpiresIn,
     });
 
     return {
       accessToken: data.data.accessToken,
+      // The CLI keeps the whole `data` object, so a rotated refresh token
+      // replaces the old one; a server that omits it keeps the current value.
       refreshToken: data.data.refreshToken || refreshToken,
       expiresIn: data.data.expiresIn,
+      // The refresh token has its own lifetime (`calculateExpiresAt` in the CLI).
+      refreshExpiresAt: codebuddyRefreshExpiry(data.data),
     };
   }, log);
 }
 
+/** Epoch ms when the refresh token itself dies, from the refresh response. */
+function codebuddyRefreshExpiry(token) {
+  if (!token) return undefined;
+  if (typeof token.refreshExpiresAt === "number") return token.refreshExpiresAt;
+  if (typeof token.refreshExpiresIn === "number") return Date.now() + token.refreshExpiresIn * 1000;
+  return undefined;
+}
+
+export async function refreshCodebuddyToken(credentials, log) {
+  return refreshCodebuddyProvider("codebuddy-cn", "copilot.tencent.com", credentials, log);
+}
+
 export async function refreshCodebuddyIntlToken(credentials, log) {
-  const refreshToken = typeof credentials === "string" ? credentials : credentials?.refreshToken;
-  const oldAccessToken = typeof credentials === "object" && credentials ? credentials.accessToken : null;
-  let uid = null;
-  if (oldAccessToken) {
-    try { uid = extractCodebuddyUid(oldAccessToken); } catch {}
-  }
-  return dedupRefresh("codebuddy-intl", refreshToken, async () => {
-    const oauth = PROVIDER_OAUTH["codebuddy-intl"] || {};
-    const response = await fetch(oauth.refreshUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent": oauth.userAgent,
-        "X-Requested-With": "XMLHttpRequest",
-        "X-Domain": "www.codebuddy.ai",
-        "X-Refresh-Token": refreshToken,
-        "X-Auth-Refresh-Source": "plugin",
-        "X-Product": "SaaS",
-        ...(oldAccessToken ? { Authorization: `Bearer ${oldAccessToken}` } : {}),
-        ...(uid ? { "X-User-Id": uid } : {}),
-      },
-      body: "{}",
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      log?.error?.("TOKEN_REFRESH", "Failed to refresh CodeBuddy intl token", {
-        status: response.status,
-        error: errorText,
-      });
-      return null;
-    }
-
-    const data = await response.json();
-    if (data.code !== 0 || !data.data?.accessToken) {
-      log?.error?.("TOKEN_REFRESH", "CodeBuddy intl token refresh returned no token", {
-        code: data.code,
-        msg: data.msg,
-      });
-      return null;
-    }
-
-    log?.info?.("TOKEN_REFRESH", "Successfully refreshed CodeBuddy intl token", {
-      hasNewAccessToken: !!data.data.accessToken,
-      hasNewRefreshToken: !!data.data.refreshToken,
-      expiresIn: data.data.expiresIn,
-    });
-
-    return {
-      accessToken: data.data.accessToken,
-      refreshToken: data.data.refreshToken || refreshToken,
-      expiresIn: data.data.expiresIn,
-    };
-  }, log);
+  return refreshCodebuddyProvider("codebuddy-intl", "www.codebuddy.ai", credentials, log);
 }
 
 // Trae refresh — POST ExchangeToken with JSON body {ClientID, RefreshToken, ClientSecret, UserID}.

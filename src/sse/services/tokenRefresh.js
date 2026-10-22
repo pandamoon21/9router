@@ -26,6 +26,7 @@ import {
 import {
   refreshProviderCredentials as _refreshProviderCredentials,
   shouldRefreshCredentials as _shouldRefreshCredentials,
+  isRefreshTokenExpired as _isRefreshTokenExpired,
 } from "open-sse/services/oauthCredentialManager.js";
 
 export const TOKEN_EXPIRY_BUFFER_MS = BUFFER_MS;
@@ -173,6 +174,15 @@ export async function updateProviderCredentials(connectionId, newCredentials) {
     if (newCredentials.apiKey)              updates.apiKey       = newCredentials.apiKey;
     if (newCredentials.idToken)             updates.idToken = newCredentials.idToken;
     if (newCredentials.lastRefreshAt)       updates.lastRefreshAt = newCredentials.lastRefreshAt;
+    // Refresh-token lifetime (CodeBuddy `refreshExpiresIn`): kept separately from
+    // the access-token expiry so an expired refresh token can be reported as
+    // "needs re-login" without waiting for a round trip that can only fail.
+    if (newCredentials.refreshExpiresAt) {
+      updates.providerSpecificData = {
+        ...(updates.providerSpecificData || newCredentials.existingProviderSpecificData || {}),
+        refreshExpiresAt: newCredentials.refreshExpiresAt,
+      };
+    }
     if (newCredentials.expiresAt)           updates.expiresAt = newCredentials.expiresAt;
     if (newCredentials.expiresIn) {
       updates.expiresAt = toExpiresAt(newCredentials.expiresIn);
@@ -255,6 +265,17 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
 
   // ── 1. Regular access-token expiry ────────────────────────────────────────
   if (force || _shouldRefreshCredentials(provider, creds)) {
+    // A refresh token past its own lifetime cannot be exchanged — say so once
+    // instead of burning a round trip on every request (and never cooling the
+    // account down through the generic 401 path, which hides the real cause).
+    if (_isRefreshTokenExpired(creds)) {
+      log.warn("TOKEN_REFRESH", "Refresh token is past its lifetime; connection needs a fresh login", {
+        provider,
+        refreshExpiresAt: creds.providerSpecificData?.refreshExpiresAt,
+      });
+      return creds;
+    }
+
     const expiresAt = creds.expiresAt ? new Date(creds.expiresAt).getTime() : null;
     const remaining = expiresAt ? expiresAt - Date.now() : null;
     const refreshLead = _getRefreshLeadMs(provider);

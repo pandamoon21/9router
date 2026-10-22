@@ -132,6 +132,9 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
 
   // Use useState + useEffect for impure Date.now() to avoid calling during render
   const [isCooldown, setIsCooldown] = useState(false);
+  // Same idiom for the token-health badge: sampled once, then refreshed with
+  // the cooldown ticker below.
+  const [nowMs, setNowMs] = useState(0);
 
   // Get earliest model lock timestamp (useEffect handles the Date.now() comparison)
   const modelLockUntil = Object.entries(connection)
@@ -148,6 +151,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
         .filter(v => v && new Date(v).getTime() > Date.now())
         .sort()[0] || null;
       setIsCooldown(!!until);
+      setNowMs(Date.now());
     };
 
     checkCooldown();
@@ -163,6 +167,48 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
     : connection.testStatus;
 
   const getStatusVariant = () => getConnectionStatusVariant(connection.isActive, effectiveStatus);
+
+  // CodeBuddy stores an access/refresh pair. The pair's health is not visible
+  // from `testStatus` alone: a connection can be "active" while its refresh
+  // token is dead, and then the next access-token expiry silently kills it.
+  // Show which half is alive, plus when the refresh token itself expires.
+  const tokenHealth = (() => {
+    if (!["codebuddy-cn", "codebuddy-intl"].includes(connection.provider)) return null;
+    const hasRefresh = !!connection.hasRefreshToken;
+    const rawRefreshExpiry = connection.providerSpecificData?.refreshExpiresAt;
+    const refreshExpiresMs = typeof rawRefreshExpiry === "number"
+      ? rawRefreshExpiry
+      : Date.parse(rawRefreshExpiry || "");
+    // `nowMs` is sampled in the effect below — never read the clock in render.
+    const refreshExpired = Number.isFinite(refreshExpiresMs) && refreshExpiresMs <= nowMs;
+
+    if (!hasRefresh) {
+      return {
+        variant: "error",
+        label: "no refresh token",
+        title: "Only an access token is stored, so this connection cannot renew itself. Add the token pair (access + refresh) to survive expiry.",
+      };
+    }
+    if (refreshExpired) {
+      return {
+        variant: "error",
+        label: `refresh expired ${new Date(refreshExpiresMs).toLocaleDateString()}`,
+        title: `The refresh token expired on ${new Date(refreshExpiresMs).toLocaleString()}. Paste a new token pair to renew.`,
+      };
+    }
+    if (Number.isFinite(refreshExpiresMs)) {
+      return {
+        variant: "success",
+        label: `refresh ok · ${new Date(refreshExpiresMs).toLocaleDateString()}`,
+        title: `Refresh token valid until ${new Date(refreshExpiresMs).toLocaleString()}. The access token renews automatically before it expires.`,
+      };
+    }
+    return {
+      variant: "success",
+      label: "refresh ok",
+      title: "Refresh token stored; the access token renews automatically. Run Test to verify it is still accepted.",
+    };
+  })();
 
   const getOneByOneVariant = () => {
     if (!oneByOneStatus) return "default";
@@ -216,6 +262,13 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
             <Badge variant="default" size="sm">
               {authLabel}
             </Badge>
+            {tokenHealth && (
+              <Tooltip text={tokenHealth.title}>
+                <Badge variant={tokenHealth.variant} size="sm">
+                  {tokenHealth.label}
+                </Badge>
+              </Tooltip>
+            )}
             {hasAnyProxy && (
               <Badge variant={proxyBadgeVariant} size="sm">
                 Proxy
@@ -341,6 +394,12 @@ ConnectionRow.propTypes = {
     lastError: PropTypes.string,
     priority: PropTypes.number,
     globalPriority: PropTypes.number,
+    provider: PropTypes.string,
+    hasRefreshToken: PropTypes.bool,
+    hasAccessToken: PropTypes.bool,
+    providerSpecificData: PropTypes.shape({
+      refreshExpiresAt: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+    }),
   }).isRequired,
   proxyPools: PropTypes.arrayOf(PropTypes.shape({
     id: PropTypes.string,

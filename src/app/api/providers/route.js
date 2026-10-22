@@ -13,6 +13,28 @@ import { toProviderConnectionResponse } from "@/lib/providerConnectionResponse";
 
 export const dynamic = "force-dynamic";
 
+// Providers whose dashboard flow is OAuth, but which accept a bearer token pair
+// pasted by hand. Without this, the create route only ever stores `apiKey`, so a
+// refresh token entered there lands in the API-key column and can never refresh.
+const TOKEN_PAIR_PROVIDERS = new Set(["codebuddy-cn", "codebuddy-intl"]);
+
+function normalizeManualTokenPair(provider, body = {}) {
+  if (!TOKEN_PAIR_PROVIDERS.has(provider)) return null;
+  const accessToken = typeof body?.accessToken === "string" ? body.accessToken.trim() : "";
+  const refreshToken = typeof body?.refreshToken === "string" ? body.refreshToken.trim() : "";
+  if (!accessToken && !refreshToken) return null;
+  const expiresIn = Number(body?.expiresIn);
+  return {
+    authType: "oauth",
+    accessToken: accessToken || "",
+    refreshToken,
+    expiresIn: Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : undefined,
+    // Only trust an explicit expiresAt; otherwise the first chat (or the
+    // proactive check) drives the refresh.
+    expiresAt: typeof body?.expiresAt === "string" && body.expiresAt ? body.expiresAt : undefined,
+  };
+}
+
 function normalizeProxyConfig(body = {}) {
   const enabled = body?.connectionProxyEnabled === true;
   const url = typeof body?.connectionProxyUrl === "string" ? body.connectionProxyUrl.trim() : "";
@@ -118,7 +140,8 @@ export async function POST(request) {
     // key to paste. Without this, following such a provider's own setup notice returns 400.
     const apiKeySubstitute = AI_PROVIDERS[provider]?.apiKeyOptionalWith;
     const hasApiKeySubstitute = !!(apiKeySubstitute && body.providerSpecificData?.[apiKeySubstitute]);
-    if (!apiKey && provider !== "ollama-local" && !hasApiKeySubstitute) {
+    const manualTokenPair = normalizeManualTokenPair(provider, body);
+    if (!apiKey && !manualTokenPair && provider !== "ollama-local" && !hasApiKeySubstitute) {
       return NextResponse.json({ error: `${isWebCookieProvider ? "Cookie value" : "API Key"} is required` }, { status: 400 });
     }
     const connectionName = name || displayName || AI_PROVIDERS[provider]?.name;
@@ -176,9 +199,18 @@ export async function POST(request) {
 
     const newConnection = await createProviderConnection({
       provider,
-      authType: isWebCookieProvider ? "cookie" : "apikey",
+      authType: manualTokenPair ? "oauth" : (isWebCookieProvider ? "cookie" : "apikey"),
       name: connectionName,
       apiKey: apiKey || "",
+      // A pasted token pair is stored where the refresh path reads it, so the
+      // connection can refresh itself instead of dying when the access token
+      // expires.
+      ...(manualTokenPair ? {
+        accessToken: manualTokenPair.accessToken,
+        refreshToken: manualTokenPair.refreshToken,
+        expiresIn: manualTokenPair.expiresIn,
+        expiresAt: manualTokenPair.expiresAt,
+      } : {}),
       priority: priority || 1,
       globalPriority: globalPriority || null,
       defaultModel: defaultModel || null,

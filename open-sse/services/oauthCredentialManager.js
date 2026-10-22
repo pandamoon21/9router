@@ -42,6 +42,20 @@ export function isCodexRefreshStale(credentials, nowMs = Date.now(), maxAgeMs = 
   return !lastRefreshMs || nowMs - lastRefreshMs >= maxAgeMs;
 }
 
+/**
+ * True when the stored refresh token is itself past its lifetime.
+ *
+ * CodeBuddy's token payload carries `refreshExpiresIn`, which the client keeps
+ * as `refreshExpiresAt`. Once that passes, a refresh call cannot succeed, so
+ * callers should report "re-authenticate" instead of spending a round trip per
+ * request on a refresh that is guaranteed to fail.
+ */
+export function isRefreshTokenExpired(credentials, nowMs = Date.now()) {
+  const expiresAt = credentials?.providerSpecificData?.refreshExpiresAt;
+  const ms = typeof expiresAt === "number" ? expiresAt : Date.parse(expiresAt || "");
+  return Number.isFinite(ms) && ms <= nowMs;
+}
+
 export function shouldRefreshCredentials(provider, credentials, nowMs = Date.now()) {
   if (!credentials) return false;
 

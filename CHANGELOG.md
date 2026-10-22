@@ -15,6 +15,41 @@ fingerprint, Kiro wire parity, fork changelog URL / update banner. Conflicts:
 `CHANGELOG.md` (fork section on top, upstream notes below) and
 `tests/__baseline__/providers-baseline.json` (union, adds upstream `nous`).
 
+## 2026-10-22 — CodeBuddy: manual token pair, dead-token detection, UI state
+
+Pasting only an `access_token` into 9router's API-key form stored it as a static
+API key: the refresh token never reached the connection, so the account died the
+moment the access token expired. Three fixes on the same path:
+
+- **Manual token pair input.** `POST /api/providers` accepts
+  `accessToken` + `refreshToken` (+ optional `expiresIn` / `expiresAt`) for
+  `codebuddy-cn` / `codebuddy-intl` and stores them as an `oauth` connection, so
+  the credential can renew itself. Previously the route only ever wrote `apiKey`.
+- **Dead refresh token is classified, not retried.** Tencent answers a rejected
+  refresh token with HTTP 401/403 plus `code 12153` (`refresh token failed`,
+  usually `10000:token format error`). The generic `classifyOAuthRefreshError`
+  only knows OAuth2's `invalid_grant` vocabulary, so 12153 looked transient and
+  every later request retried the refresh. It now maps to `invalid_grant`
+  (unrecoverable → connection needs a fresh login), matching the CLI's
+  `UnauthorizedError` handling; 5xx and network errors stay transient.
+- **Refresh-token lifetime is stored and checked.** `refreshExpiresIn` →
+  `providerSpecificData.refreshExpiresAt` (the CLI's `calculateExpiresAt`), and
+  `isRefreshTokenExpired` short-circuits the exchange instead of spending a round
+  trip per request on a refresh that cannot succeed.
+
+Both refresh functions now share one implementation (`refreshCodebuddyProvider`),
+which also stops sending the request at all when no refresh token is present.
+
+**Dashboard.** The connection test for CodeBuddy no longer returns
+"token exists" unconditionally: it exchanges the refresh token and reports
+`tokenState` (access/refresh alive, revoked, unverified, expired). The connection
+row shows a badge — *no refresh token* / *refresh ok · \<date\>* / *refresh
+expired \<date\>* — and the API response now carries `hasRefreshToken` /
+`hasAccessToken` booleans (never the tokens themselves).
+
+Coverage: `tests/unit/codebuddy-refresh-token.test.js` (11 cases) and
+`tests/unit/codebuddy-refresh-expiry.test.js` (4 cases).
+
 ## 2026-10-22 — CodeBuddy CN/Intl: 1:1 gateway fingerprint from WorkBuddy.exe
 
 Reverse-engineered `WorkBuddy.exe` (WorkBuddy Desktop **5.8.3**) to recover the
