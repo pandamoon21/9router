@@ -1,7 +1,7 @@
-import crypto from "node:crypto";
 import { DefaultExecutor } from "./default.js";
 import { enforceResponseFormat } from "../utils/enforceResponseFormat.js";
 import { sanitizeCodeBuddyToolNames, stripCodeBuddySchemaMarkers, flattenCodeBuddyToolChoice } from "../utils/codebuddyToolSanitize.js";
+import { applyCodeBuddyRequestHeaders, applyCodeBuddyClientProfile, resolveCodeBuddyClientOverride, applyCodeBuddyBodyRules } from "../utils/codebuddyGateway.js";
 
 /**
  * CodeBuddyExecutor — talks to https://copilot.tencent.com/v2/chat/completions
@@ -17,23 +17,32 @@ export class CodeBuddyExecutor extends DefaultExecutor {
     super("codebuddy-cn");
   }
 
-  // Tencent Aegis (WAF) flags requests that lack the real CLI's per-request
-  // fingerprint. Real @tencent-ai/codebuddy-code@2.156.0 stamps these 8 headers
-  // on every /v2/chat/completions call — the registry only sets static ones, so
-  // we add the dynamic identity headers here. Values match constants extracted
-  // from the CLI bundle (see resolveAgentType → main/subagent/team).
+  // Tencent Aegis (WAF) flags requests that lack the real client's per-request
+  // fingerprint. The CodeBuddy Code CLI stamps these on every
+  // /v2/chat/completions call; the registry only carries the static identity
+  // headers, so the dynamic ones are added here.
+  //
+  // Shape extracted 2026-10-22 from the CLI bundle shipped inside WorkBuddy
+  // Desktop 5.8.3 (app.asar → app/cli/dist/codebuddy-lite-wb.mjs,
+  // `axiosToFetchAdapter`) and from WorkBuddy's own upstream leg
+  // (app.asar → app/main/server.js, `applyGatewayHeaders`):
+  //   X-Conversation-ID          dashed UUID, stable for the conversation
+  //   X-Conversation-Request-ID  32 hex, fresh per turn   ┐ aliases each other
+  //   X-Root-Request-ID          32 hex                    ┘
+  //   X-Conversation-Message-ID  32 hex, fresh per turn   ┐ aliases each other
+  //   X-Request-ID               32 hex                    ┘
+  //   X-Agent-Intent             "craft"
+  //   X-Agent-Purpose            "conversation"
+  //   X-Agent-Type               main / subagent / team
+  //   traceparent / b3 / X-B3-* / X-Trace-ID
   buildHeaders(credentials, stream, url, model, body) {
     const h = super.buildHeaders(credentials, stream, url, model, body);
-    const cid = crypto.randomUUID();
-    const mid = crypto.randomUUID();
-    h["X-Conversation-ID"] = cid;
-    h["X-Conversation-Request-ID"] = crypto.randomUUID();
-    h["X-Conversation-Message-ID"] = mid;
-    h["X-Request-ID"] = mid;
-    h["X-Agent-Intent"] = "craft";
-    h["X-Agent-Type"] = "main";
-    h["X-Private-Data"] = "false";
-    h["X-Product-Version"] = "2.156.0";
+    applyCodeBuddyRequestHeaders(h, { credentials, body, scope: "codebuddy-cn" });
+    // `CODEBUDDY_CLIENT=workbuddy|cli|ide` swaps the whole identity block
+    // (User-Agent, X-IDE-*, X-Product-Version, X-Private-Data) for a
+    // credential minted on that platform.
+    const profile = resolveCodeBuddyClientOverride();
+    if (profile) applyCodeBuddyClientProfile(h, profile);
     return h;
   }
 
@@ -41,6 +50,11 @@ export class CodeBuddyExecutor extends DefaultExecutor {
     let transformed = super.transformRequest(model, body, stream, credentials);
     transformed.stream = true;
     transformed = enforceResponseFormat(transformed) || transformed;
+    // Body rules the CLI applies to every model request: `max_tokens` is
+    // renamed for the OpenAI reasoning models, and the `xhigh`/`max` thinking
+    // levels collapse to `high` when the server publishes no per-model map.
+    // Keyed off the model that actually goes upstream.
+    applyCodeBuddyBodyRules(transformed, transformed.model || model);
 
     // CodeBuddy CN model validators reject tool shapes the plain OpenAI API
     // accepts: the Kimi/DeepSeek gateways demand a stricter tool-name grammar

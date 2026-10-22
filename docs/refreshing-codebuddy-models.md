@@ -60,7 +60,7 @@ node scripts/refresh-codebuddy-models.mjs --provider=intl --token="<jwt>"
    | Header | Value |
    |---|---|
    | `Authorization` | `Bearer <token>` |
-   | `User-Agent` | `CLI/2.156.0 CodeBuddy/2.156.0` |
+   | `User-Agent` | `CLI/2.172.1 CodeBuddy/2.172.1` |
    | `X-Product` | `SaaS` |
    | `X-Domain` | `www.codebuddy.cn` or `www.codebuddy.ai` |
    | `X-User-Id` | `sub` claim from the JWT |

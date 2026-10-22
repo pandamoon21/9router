@@ -1,6 +1,7 @@
 import { DefaultExecutor } from "./default.js";
 import { enforceResponseFormat } from "../utils/enforceResponseFormat.js";
 import { sanitizeCodeBuddyToolNames, stripCodeBuddySchemaMarkers, flattenCodeBuddyToolChoice } from "../utils/codebuddyToolSanitize.js";
+import { applyCodeBuddyRequestHeaders, applyCodeBuddyClientProfile, resolveCodeBuddyClientOverride, applyCodeBuddyBodyRules } from "../utils/codebuddyGateway.js";
 
 /**
  * CodeBuddyIntlExecutor — talks to https://www.codebuddy.ai/v2/chat/completions
@@ -15,10 +16,38 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
     super("codebuddy-intl");
   }
 
+  // The international gateway is the same Tencent stack behind a different
+  // host, so it scores the same per-request fingerprint. Until now this
+  // executor sent only the registry's static headers — no conversation ids,
+  // no agent headers, no trace headers — which is the shape the gateway's
+  // channel check rejects with HTTP 400 / code 11-128 ("conversation id
+  // missing", displayTips「这次调用没通过渠道校验，可能不是官方客户端发出的」).
+  //
+  // Shape extracted 2026-10-22 from the CLI bundle shipped inside WorkBuddy
+  // Desktop 5.8.3 (app.asar → app/cli/dist/codebuddy-lite-wb.mjs,
+  // `axiosToFetchAdapter`) and from WorkBuddy's own upstream leg
+  // (app.asar → app/main/server.js, `applyGatewayHeaders`).
+  buildHeaders(credentials, stream, url, model, body) {
+    const h = super.buildHeaders(credentials, stream, url, model, body);
+    applyCodeBuddyRequestHeaders(h, { credentials, body, scope: "codebuddy-intl" });
+    // `CODEBUDDY_CLIENT=workbuddy|cli|ide` swaps the whole identity block
+    // (User-Agent, X-IDE-*, X-Product-Version, X-Private-Data) for a
+    // credential minted on that platform.
+    const profile = resolveCodeBuddyClientOverride();
+    if (profile) applyCodeBuddyClientProfile(h, profile);
+    return h;
+  }
+
   transformRequest(model, body, stream, credentials) {
     let transformed = super.transformRequest(model, body, stream, credentials);
     transformed.stream = true;
     transformed = enforceResponseFormat(transformed) || transformed;
+    // Body rules the CLI applies to every model request: `max_tokens` is
+    // renamed to `max_completion_tokens` for the OpenAI reasoning models
+    // (gpt-5.x, gpt-4.1, o1/o3/o4), and the `xhigh`/`max` thinking levels
+    // collapse to `high` when the server publishes no per-model map.
+    // Keyed off the model that actually goes upstream.
+    applyCodeBuddyBodyRules(transformed, transformed.model || model);
 
     // Same tool-shape normalisation as codebuddy-cn: the intl gateway shares the
     // Tencent model validators that reject illegal/duplicated tool names (11152),

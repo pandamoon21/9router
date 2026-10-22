@@ -52,6 +52,7 @@ source/*
 docs/*
 !docs/ARCHITECTURE.md
 !docs/codebuddy-cn-system-prompt-results.md
+!docs/codebuddy-gateway-fingerprint.md
 !docs/refreshing-codebuddy-models.md
 !docs/updating-from-upstream.md
 test/*
@@ -116,3 +117,6 @@ _patch_codebuddy_filter.py
 _probe_out/
 __pycache__/
 .omc/
+
+# RE scratch — extracted WorkBuddy/app.asar artefacts, probe scripts, local caches.
+.work/

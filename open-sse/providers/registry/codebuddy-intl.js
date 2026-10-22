@@ -26,14 +26,18 @@ export default {
     // CodeBuddy intl speaks the same unified OpenAI reasoning_effort shape as CN.
     thinkingFormat: "openai",
     headers: {
-      "User-Agent": "IDE/2.133.1 CodeBuddy/2.133.1",
+      "User-Agent": "IDE/2.172.1 CodeBuddy/2.172.1",
       "X-Product": "SaaS",
+      "X-Product-Version": "2.172.1",
       "X-IDE-Type": "IDE",
       "X-IDE-Name": "IDE",
+      "X-IDE-Version": "2.172.1",
+      // The CLI advertises private-data mode from its `enableModelOptimization`
+      // setting; with model optimisation on (the default) it sends "false".
+      "X-Private-Data": "false",
       "x-requested-with": "XMLHttpRequest",
       "x-codebuddy-request": "1",
-    "X-Domain": "www.codebuddy.ai",
-    "X-IDE-Version": "2.133.1",
+      "X-Domain": "www.codebuddy.ai",
     },
     auth: {
       combined: true,
@@ -69,7 +73,7 @@ export default {
     stateUrl: "https://www.codebuddy.ai/v2/plugin/auth/state",
     tokenUrl: "https://www.codebuddy.ai/v2/plugin/auth/token",
     refreshUrl: "https://www.codebuddy.ai/v2/plugin/auth/token/refresh",
-    userAgent: "IDE/2.133.1 CodeBuddy/2.133.1",
+    userAgent: "IDE/2.172.1 CodeBuddy/2.172.1",
     platform: "ide",
     pollInterval: 5000,
   },

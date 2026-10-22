@@ -32,14 +32,14 @@ const PROVIDERS = {
     id: "codebuddy-cn",
     registry: "open-sse/providers/registry/codebuddy-cn.js",
     configUrl: "https://copilot.tencent.com/v3/config",
-    userAgent: "CLI/2.156.0 CodeBuddy/2.156.0",
+    userAgent: "CLI/2.172.1 CodeBuddy/2.172.1",
     domain: "www.codebuddy.cn",
   },
   intl: {
     id: "codebuddy-intl",
     registry: "open-sse/providers/registry/codebuddy-intl.js",
     configUrl: "https://www.codebuddy.ai/v3/config",
-    userAgent: "CLI/2.156.0 CodeBuddy/2.156.0",
+    userAgent: "CLI/2.172.1 CodeBuddy/2.172.1",
     domain: "www.codebuddy.ai",
   },
 };

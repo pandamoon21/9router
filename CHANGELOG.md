@@ -7,6 +7,46 @@ To install a fork build, use `.\install.ps1` (Windows) or `./install.sh` — pla
 `npm install -g 9router` / `npm update -g 9router` fetches the upstream registry
 build and silently discards everything listed here.
 
+## 2026-10-22 — CodeBuddy CN/Intl: 1:1 gateway fingerprint from WorkBuddy.exe
+
+Reverse-engineered `WorkBuddy.exe` (WorkBuddy Desktop **5.8.3**) to recover the
+exact request shape Tencent's gateway fingerprints, and aligned both CodeBuddy
+providers with it. Full evidence, extraction commands and the upstream PR
+survey live in `docs/codebuddy-gateway-fingerprint.md`.
+
+- **`open-sse/utils/codebuddyGateway.js` (new)** — one source of truth for the
+  fingerprint: client identity profiles (`cli` / `ide` / `workbuddy`), the
+  client's User-Agent template (`<platform>/<ver> <applicationName>/<ver>
+  [extension]`), the UUIDv7 / 32-hex id helpers, the W3C+B3 trace family, the
+  conversation + agent header family, and the client's body rules.
+- **`codebuddy-intl` gained the whole per-request header family.** It used to
+  send the registry's static headers only — no conversation ids, no agent
+  headers, no trace headers — which is the shape the gateway's channel check
+  rejects with `HTTP 400 / code 11-128` (`conversation id missing`,
+  「这次调用没通过渠道校验」). `codebuddy-cn` gains `X-Agent-Purpose`,
+  `X-Root-Request-ID` and the trace family it was missing.
+- **Id shapes now match the client**: `X-Conversation-ID` is a dashed UUID that
+  stays stable for the conversation; `X-Conversation-Request-ID`,
+  `X-Root-Request-ID`, `X-Conversation-Message-ID` and `X-Request-ID` are 32-hex
+  and rotate per turn; the two aliased pairs stay aliased. A caller-supplied
+  `X-Conversation-ID` is preserved verbatim (upstream PR #5086).
+- **Body rules**: `max_tokens` → `max_completion_tokens` for
+  `o1/o3/o4/gpt-4.1/gpt-5*`; `xhigh`/`max` thinking levels collapse to `high`
+  when the server publishes no per-model map.
+- **Client version 2.156.0 → 2.172.1** (current npm release of
+  `@tencent-ai/codebuddy-code`); the international registry was still on
+  2.133.1. `X-Product-Version` and `X-Private-Data` moved into the registries'
+  static identity block.
+- **`CODEBUDDY_CLIENT=cli|ide|workbuddy`** swaps the whole identity block
+  atomically (User-Agent, `X-IDE-*`, `X-Product-Version`, `X-Private-Data`) —
+  the upstream binds the token to the platform it was minted for, so the
+  profile must match the credential.
+- Coverage: `tests/unit/codebuddy-cn-waf-headers.test.js` (updated),
+  `tests/unit/codebuddy-intl-gateway-headers.test.js` (new),
+  `tests/unit/codebuddy-body-rules.test.js` (new). Providers baseline
+  re-pinned; the regression gate reports 68 failures, all in the known-fails
+  allowlist.
+
 ## 2026-10-14 — Upstream merge: v0.5.95 → v0.5.99 (`ce4460ef`)
 
 Merged upstream `decolua/9router` **v0.5.99** (2026-10-08) — 29 upstream

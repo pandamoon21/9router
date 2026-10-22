@@ -179,14 +179,16 @@
     "forceStream": true,
     "thinkingFormat": "openai",
     "headers": {
-      "User-Agent": "CLI/2.156.0 CodeBuddy/2.156.0",
+      "User-Agent": "CLI/2.172.1 CodeBuddy/2.172.1",
       "X-Product": "SaaS",
+      "X-Product-Version": "2.172.1",
       "X-IDE-Type": "CLI",
       "X-IDE-Name": "CLI",
+      "X-IDE-Version": "2.172.1",
+      "X-Private-Data": "false",
       "x-requested-with": "XMLHttpRequest",
       "x-codebuddy-request": "1",
-      "X-Domain": "www.codebuddy.cn",
-      "X-IDE-Version": "2.156.0"
+      "X-Domain": "www.codebuddy.cn"
     },
     "auth": {
       "combined": true,
@@ -546,6 +548,18 @@
           "combined": true,
           "header": "x-api-key",
           "scheme": "raw",
+          "hooks": [
+            "kimiHeaders"
+          ]
+        }
+      },
+      {
+        "format": "openai-responses",
+        "baseUrl": "https://api.kimi.com/coding/v1/responses",
+        "auth": {
+          "combined": true,
+          "header": "Authorization",
+          "scheme": "bearer",
           "hooks": [
             "kimiHeaders"
           ]
@@ -987,14 +1001,16 @@
     "forceStream": true,
     "thinkingFormat": "openai",
     "headers": {
-      "User-Agent": "IDE/2.133.1 CodeBuddy/2.133.1",
+      "User-Agent": "IDE/2.172.1 CodeBuddy/2.172.1",
       "X-Product": "SaaS",
+      "X-Product-Version": "2.172.1",
       "X-IDE-Type": "IDE",
       "X-IDE-Name": "IDE",
+      "X-IDE-Version": "2.172.1",
+      "X-Private-Data": "false",
       "x-requested-with": "XMLHttpRequest",
       "x-codebuddy-request": "1",
-      "X-Domain": "www.codebuddy.ai",
-      "X-IDE-Version": "2.133.1"
+      "X-Domain": "www.codebuddy.ai"
     },
     "auth": {
       "combined": true,
@@ -1121,22 +1137,6 @@
     "validateUrl": "https://api.b.ai/v1/models",
     "format": "openai"
   },
-  "bedrock": {
-    "baseUrl": "https://bedrock-runtime.{region}.amazonaws.com",
-    "format": "claude",
-    "auth": {
-      "header": "aws-sigv4",
-      "scheme": "raw"
-    }
-  },
-  "bedrock-xai": {
-    "baseUrl": "https://bedrock-runtime.{region}.amazonaws.com",
-    "auth": {
-      "header": "aws-sigv4",
-      "scheme": "raw"
-    },
-    "format": "openai"
-  },
   "muse": {
     "baseUrl": "https://api.meta.ai/v1/chat/completions",
     "validateUrl": "https://api.meta.ai/v1/models",
@@ -1178,5 +1178,61 @@
         }
       }
     ]
+  },
+  "minimax-code": {
+    "baseUrl": "https://agent.minimax.cn/mavis/api/v1/llm/v1/messages",
+    "format": "claude",
+    "thinkingFormat": "claude-adaptive",
+    "headers": {
+      "User-Agent": "MiniMaxAgent",
+      "X-Mavis-Agent-Id": "main"
+    },
+    "auth": {
+      "combined": true,
+      "header": "Authorization",
+      "scheme": "bearer",
+      "anthropicVersion": true,
+      "hooks": [
+        "minimaxHeaders"
+      ]
+    },
+    "clientId": "mcode-public",
+    "tokenUrl": "https://account.minimax.cn/oauth2/token"
+  },
+  "minimax-code-global": {
+    "baseUrl": "https://agent.minimax.io/mavis/api/v1/llm/v1/messages",
+    "format": "claude",
+    "thinkingFormat": "claude-adaptive",
+    "headers": {
+      "User-Agent": "MiniMaxAgent",
+      "X-Mavis-Agent-Id": "main"
+    },
+    "auth": {
+      "combined": true,
+      "header": "Authorization",
+      "scheme": "bearer",
+      "anthropicVersion": true,
+      "hooks": [
+        "minimaxHeaders"
+      ]
+    },
+    "clientId": "mcode-public",
+    "tokenUrl": "https://account.minimax.io/oauth2/token"
+  },
+  "bedrock": {
+    "baseUrl": "https://bedrock-runtime.{region}.amazonaws.com",
+    "format": "claude",
+    "auth": {
+      "header": "aws-sigv4",
+      "scheme": "raw"
+    }
+  },
+  "bedrock-xai": {
+    "baseUrl": "https://bedrock-runtime.{region}.amazonaws.com",
+    "auth": {
+      "header": "aws-sigv4",
+      "scheme": "raw"
+    },
+    "format": "openai"
   }
 }
