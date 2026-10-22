@@ -288,6 +288,61 @@ POST /v2{prefixPath}/auth/token/refresh        # X-Refresh-Token + X-Auth-Refres
 State/token requests carry `X-No-Authorization`, `X-No-User-Id`,
 `X-No-Enterprise-Id`, `X-No-Department-Info: "true"`.
 
+### 3.9 Refresh-token lifecycle — what the client does
+
+Worth spelling out because 9router mirrors it (`open-sse/services/tokenRefresh/providers.js`):
+
+**Request shape** (`refreshSession`, @ 7 064 026):
+
+```js
+this.restOperations.post(`/v2${this.prefixPath}/auth/token/refresh`, {}, {
+  headers: { ...this.enterpriseHeaders(t.auth),        // X-Domain: auth.domain || authority(endpoint)
+             "X-Refresh-Token": t.auth.refreshToken,
+             "X-Auth-Refresh-Source": "plugin",
+             ...i.traceSpan.requestHeaders },
+});
+```
+
+The refresh token travels in a **header**, never in the body (`{}`), and the
+response replaces the whole `auth` object — so a rotated `refreshToken` wins and
+an omitted one keeps the current value.
+
+**Expiry bookkeeping** (`calculateExpiresAt`):
+
+```js
+!t.expiresAt        && t.expiresIn        && (t.expiresAt = Date.now() + 1e3 * t.expiresIn);
+!t.refreshExpiresAt && t.refreshExpiresIn && (t.refreshExpiresAt = Date.now() + 1e3 * t.refreshExpiresIn);
+```
+
+Two independent clocks: the access token and the refresh token.
+
+**When it refreshes** (`scheduleRefreshSession`, @ 7 097 919):
+
+```js
+let i = 864e5 + rand(0..60000) - 300000;            // ~24h − 5min ±1min
+if (expiresAt - 864e5 < Date.now()) i = 300000 + rand(0..60000);  // short-lived token → ~5min
+let delay = Math.max(lastRefreshTime + i - Date.now(), 15000);    // MIN_REFRESH_DELAY_MS
+```
+
+plus re-entry guards: `REFRESH_ATTEMPT_COOLDOWN_MS = 30 s`, and on a transient
+failure a retry at `5s · 2^n` capped at 60 s.
+
+**Failure semantics.** `isAuthenticationInvalidError` = HTTP 401/403 from the
+refresh endpoint → `UnauthorizedError`, which the retry loop treats as final
+(`t = n instanceof F.UnauthorizedError; t || !(i > 0) || this.loggedOut || (retry…)`).
+A dead refresh token ends the session; it is never retried blindly.
+
+**What Tencent actually returns for a dead token** (probed 2026-10-22 against
+`https://copilot.tencent.com/v2/plugin/auth/token/refresh`):
+
+```http
+HTTP/1.1 401
+{"code":12153,"msg":"12153:refresh token failed:10000:token format error","requestId":"…"}
+```
+
+Identical with `X-Domain: copilot.tencent.com` and `X-Domain: www.codebuddy.cn`,
+so the domain header is not what gates the refresh.
+
 ---
 
 ## 4. Leg B — WorkBuddy's own upstream leg (`main/server.js` @ 3 513 000)
@@ -514,7 +569,64 @@ rejects with code 11128. Unset keeps the registry's own identity.
 
 ---
 
-## 8. Upstream PR survey (`decolua/9router`, last two weeks)
+## 8. Token refresh in 9router
+
+Implementation: `open-sse/services/tokenRefresh/providers.js`
+(`refreshCodebuddyProvider`), `open-sse/services/oauthCredentialManager.js`
+(`isRefreshTokenExpired`), `src/sse/services/tokenRefresh.js` (app-side guard and
+persistence).
+
+| Concern | Client (§3.9) | 9router |
+|---|---|---|
+| Token transport | `X-Refresh-Token` header, body `{}` | same |
+| Refresh source marker | `X-Auth-Refresh-Source: plugin` | same |
+| `X-Domain` | `auth.domain` | fixed per deployment (`copilot.tencent.com` / `www.codebuddy.ai`) — probed equivalent |
+| `Authorization` | current access token | same |
+| Rotation | response replaces `auth` wholesale | `data.refreshToken \|\| current` |
+| Access-token clock | `expiresIn` → `expiresAt` | same |
+| Refresh-token clock | `refreshExpiresIn` → `refreshExpiresAt` | same, stored as `providerSpecificData.refreshExpiresAt` |
+| Dead token | 401/403 → `UnauthorizedError`, no retry | 401/403 or body `12153`/`token format error` → `{ error: "invalid_grant" }` (unrecoverable) |
+| Transient failure | retry `5s·2^n` ≤ 60 s | `null` (retried on the next request; `dedupRefresh` collapses bursts within 10 s) |
+| Refresh timing | timer ≈ 24 h − 5 min, or ≈ 5 min for short-lived tokens, min 15 s | 5 min before `expiresAt` (`TOKEN_EXPIRY_BUFFER_MS`), or after a chat 401 |
+
+A connection whose refresh token is past `refreshExpiresAt` is reported as
+needing a fresh login instead of being exchanged.
+
+### Entering the pair by hand
+
+The OAuth flow stores `accessToken` + `refreshToken` via `mapTokens`
+(`src/lib/oauth/providers/codebuddy-*.js`). Without login, `POST /api/providers`
+now accepts the same pair for `codebuddy-cn` / `codebuddy-intl`:
+
+```json
+{
+  "provider": "codebuddy-cn",
+  "name": "my-cbcn",
+  "accessToken": "<access_token>",
+  "refreshToken": "<refresh_token>",
+  "expiresIn": 86400
+}
+```
+
+It is stored as an `oauth` connection, which is the only shape the refresh path
+reads (`getAccessToken` bails out without `credentials.refreshToken`). Sending
+only `apiKey` keeps the old behaviour — a static key that cannot renew.
+
+> Note: `refresh_token` is the credential that matters. An access token entered
+> alone is valid only until it expires.
+
+### Surfacing the state in the dashboard
+
+`POST /api/providers/[id]/test` for these two providers exchanges the refresh
+token and returns `tokenState` (`accessToken` / `refreshToken` ∈
+`alive | expired | revoked | missing | unverified`). The connection row renders a
+badge — *no refresh token*, *refresh ok · \<date\>*, *refresh expired \<date\>* —
+and the connection payload exposes `hasRefreshToken` / `hasAccessToken` booleans
+(the tokens themselves never leave the server).
+
+---
+
+## 9. Upstream PR survey (`decolua/9router`, last two weeks)
 
 | PR | State | Title | Verdict |
 |---|---|---|---|
@@ -530,12 +642,12 @@ headers at all — `open-sse/executors/codebuddy-cn.js` there has no
 
 ---
 
-## 9. How to re-verify
+## 10. How to re-verify
 
 The client bumps roughly weekly; when the fingerprint needs a refresh, re-run
 the three steps below against a fresh install of WorkBuddy.
 
-### 9.1 Two helpers (plain Node, no dependencies)
+### 10.1 Two helpers (plain Node, no dependencies)
 
 Minified bundles are single-line, so `grep` truncates and `read` cannot show
 them. These two throwaway helpers make the bundles readable; they live in the
@@ -586,7 +698,7 @@ if (outFile) { fs.writeFileSync(outFile, body); console.log(`wrote ${out.length}
 else console.log(body);
 ```
 
-### 9.2 The three extraction steps
+### 10.2 The three extraction steps
 
 ```bash
 # 1. extract the two JS files (extractor source in §2)
@@ -613,7 +725,7 @@ package manifest (the version WorkBuddy actually ships).
 
 ---
 
-## 10. Verification status
+## 11. Verification status
 
 | Check | Result |
 |---|---|
