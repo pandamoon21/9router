@@ -43,19 +43,19 @@
 
 - Working branch: **`master`** (tracks `origin/master`).
 - Version lives in **two** places and must stay in sync: root `package.json`
-  `"version"` and `cli/package.json` `"version"`. Today both read `0.5.99`.
+  `"version"` and `cli/package.json` `"version"`. Today both read `0.5.104`.
 - The fork's changes are recorded as *normal commits on `master`* plus merge
   commits from `upstream/master`. There is **no rebase workflow** — fork patches
   keep their original commit ids so old merges never need replaying.
-- Last upstream merged: **v0.5.99** (`ce4460ef`, 2026-10-08). The fork is
-  currently `53` commits ahead of and `0` behind `upstream/master`.
+- Last upstream merged: **v0.5.104** (`87a74e1b`, 2026-10-15). The fork is
+  currently `56` commits ahead of and `0` behind `upstream/master`.
 
 Verify all of the above at any time:
 
 ```bash
 git remote -v
 git rev-parse --abbrev-ref HEAD            # master
-git rev-list --left-right --count upstream/master...HEAD   # -> "0    53"
+git rev-list --left-right --count upstream/master...HEAD   # -> "0    56"
 grep '"version"' package.json cli/package.json
 ```
 
@@ -175,7 +175,7 @@ git push origin master
   the message). Use `git fetch` + `git merge` so you can inspect first.
 - Prefer a **single merge commit per upstream release**. The fork's history shows
   exactly this pattern (`v0.5.65`, `v0.5.69`, `v0.5.75`, `v0.5.81`, `v0.5.85`,
-  `v0.5.91`, `v0.5.95`, `v0.5.99`).
+  `v0.5.91`, `v0.5.95`, `v0.5.99`, `v0.5.104`).
 - Enable **rerere** once per clone so repeated conflict resolutions are reused:
 
   ```bash
