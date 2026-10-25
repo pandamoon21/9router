@@ -17,6 +17,10 @@ describe("OpenAI → Claude context mapping", () => {
     expect(JSON.stringify(out.system), "Claude Code prompt injected").not.toContain("Claude Code");
   });
 
+  // FORK_PATCH (ecff48ee): this fork maps assistant.reasoning_content to a thinking
+  // block in open-sse/translator/request/openai-to-claude.js. Upstream has this pinned
+  // as `it.fails` (an unsigned thinking block is only valid for compatible providers),
+  // so keep it a plain `it` here and re-check on every merge.
   it("assistant reasoning_content becomes a thinking block", () => {
     const out = T({
       messages: [

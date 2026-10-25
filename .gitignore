@@ -121,3 +121,4 @@ __pycache__/
 
 # RE scratch — extracted WorkBuddy/app.asar artefacts, probe scripts, local caches.
 .work/
+.scratch/

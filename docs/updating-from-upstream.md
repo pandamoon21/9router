@@ -43,19 +43,19 @@
 
 - Working branch: **`master`** (tracks `origin/master`).
 - Version lives in **two** places and must stay in sync: root `package.json`
-  `"version"` and `cli/package.json` `"version"`. Today both read `0.5.104`.
+  `"version"` and `cli/package.json` `"version"`. Today both read `0.5.109`.
 - The fork's changes are recorded as *normal commits on `master`* plus merge
   commits from `upstream/master`. There is **no rebase workflow** — fork patches
   keep their original commit ids so old merges never need replaying.
-- Last upstream merged: **v0.5.104** (`87a74e1b`, 2026-10-15). The fork is
-  currently `56` commits ahead of and `0` behind `upstream/master`.
+- Last upstream merged: **v0.5.109** (`f39d8f07`, 2026-10-23). The fork is
+  currently `62` commits ahead of and `0` behind `upstream/master`.
 
 Verify all of the above at any time:
 
 ```bash
 git remote -v
 git rev-parse --abbrev-ref HEAD            # master
-git rev-list --left-right --count upstream/master...HEAD   # -> "0    56"
+git rev-list --left-right --count upstream/master...HEAD   # -> "0    62"
 grep '"version"' package.json cli/package.json
 ```
 
@@ -87,7 +87,9 @@ merges are almost always clean).
 | `open-sse/handlers/chatCore/streamingHandler.js` | Streaming-shape fix tied to the above |
 | `open-sse/executors/codebuddy-cn.js`<br>`open-sse/executors/codebuddy-intl.js` | CodeBuddy CLI **fingerprint** headers + WAF-safe requests |
 | `open-sse/providers/registry/codebuddy-cn.js`<br>`open-sse/providers/registry/codebuddy-intl.js` | CodeBuddy model catalogs (regenerated, see §7) |
-| `open-sse/services/tokenRefresh.js`<br>`open-sse/services/tokenRefresh/providers.js` | Pass the **whole credential object** to CodeBuddy refresh (needs `accessToken` + `X-User-Id`) |
+| `open-sse/services/tokenRefresh.js`<br>`open-sse/services/tokenRefresh/providers.js`<br>`src/sse/services/tokenRefresh.js` | Pass the **whole credential object** to CodeBuddy refresh (needs `accessToken` + `X-User-Id`); skip the refresh call when the refresh token is already past `refreshExpiresAt` |
+| `open-sse/translator/request/openai-to-claude.js` | Map assistant `reasoning_content` to a leading `thinking` block (ecff48ee). Upstream pins this as `it.fails`; the fork keeps `tests/translator/bugs-toClaude-context.test.js` a plain `it` |
+| `src/app/api/providers/route.js`<br>`src/app/api/providers/[id]/test/route.js`<br>`src/app/api/providers/[id]/test/testUtils.js`<br>`src/lib/providerConnectionResponse.js`<br>`src/app/(dashboard)/dashboard/providers/[id]/ConnectionRow.js` | CodeBuddy manual `accessToken`+`refreshToken` input, dead-refresh-token (`12153`) classification, connection-row state |
 | `src/sse/handlers/chat.js` | Fire-and-forget CodeBuddy device-fingerprint + lifecycle **telemetry** |
 | `src/shared/components/Sidebar.js` | Update banner says "**Upstream vX available — this install is a fork**" |
 | `src/shared/constants/config.js` | Changelog URL points at **this fork**, not `decolua` |
@@ -96,7 +98,7 @@ merges are almost always clean).
 | `cli/scripts/build-cli.js` | Portable package-size walk (no `du -sh`, which breaks Windows) |
 | `.env.example`, `.gitignore` | Fork-only knobs (`CODEBUDDY_CN_AGENT_FILTER`) + ignored scratch |
 | `package.json` | Upstream-owned, but fork-relevant: `@aws-sdk/credential-providers` sits in `optionalDependencies` and is imported lazily by `open-sse/shared/awsCredentials.js` — **run `npm install` after any merge that touches it**, or the Next build fails with `Module not found: Can't resolve '@aws-sdk/credential-providers'` |
-| `tests/**` | Fork regression tests (see §8) |
+| `tests/**` | Fork regression tests (see §8). Fork-owned assertions that differ from upstream: `kiro-external-idp.test.js` (external_idp keeps the CodeWhisperer-first order; only api_key leads with `q.*`) and `bugs-toClaude-context.test.js` |
 
 ### B. Fork-only new files — safe, never edited by upstream
 
@@ -114,6 +116,7 @@ install.ps1                                  scripts/refresh-codebuddy-models.mj
 scripts/verify-codebuddy-tools.mjs           scripts/_regen-known-fails.mjs
 tests/translator/kiro-cli-parity-*.test.js   tests/unit/codebuddy-*.test.js
 tests/unit/kiro-no-top-level-model.test.js
+open-sse/utils/codebuddyGateway.js           open-sse/services/codebuddy/refreshExpiry.js
 ```
 
 **Gitignored, not committed** (`.gitignore`): `_probe_out/`, `_probe_*.py`,
@@ -175,7 +178,7 @@ git push origin master
   the message). Use `git fetch` + `git merge` so you can inspect first.
 - Prefer a **single merge commit per upstream release**. The fork's history shows
   exactly this pattern (`v0.5.65`, `v0.5.69`, `v0.5.75`, `v0.5.81`, `v0.5.85`,
-  `v0.5.91`, `v0.5.95`, `v0.5.99`, `v0.5.104`).
+  `v0.5.91`, `v0.5.95`, `v0.5.99`, `v0.5.104`, `v0.5.109`).
 - Enable **rerere** once per clone so repeated conflict resolutions are reused:
 
   ```bash
@@ -389,6 +392,12 @@ cd tests && npx vitest run translator/golden-url-header.test.js -u   # writes/up
 cd tests && npx vitest run translator/golden-url-header.test.js      # verify stable, no -u
 ```
 
+> **v0.5.109 update:** upstream re-added `golden-url-header.test.js.snap` as a
+> *tracked* file, so a merge now brings it in and `-u` rewrites a tracked file.
+> The snapshot embeds host values (`X-PLATFORM`, `X-PLATFORM-VERSION`); after
+> `-u` on Windows, restore them to the committed `linux` / `v22.23.2` with `sed`
+> before committing, or the diff is machine-specific noise.
+
 > Do **not** `rm` the `.snap` and re-run without `-u` — every case reports as
 > "148 failed" instead of writing fresh baselines. `-u` is what writes them.
 
@@ -478,6 +487,7 @@ bash ./install.sh --build-only
 | `git merge upstream/master` says **"Already up to date."** | upstream has no commits newer than the last merged release — nothing to do | this is a valid no-op; confirm with `git rev-list --count HEAD..upstream/master` (expect `0`) and stop. Do **not** fabricate a merge |
 | `./install.sh` → exit 126 / "not a valid Win32 application" | Windows shell cannot execute a shebang script directly | run it through bash: `bash ./install.sh --build-only` (Git Bash / WSL), or use `.\install.ps1` on Windows |
 | `git fetch upstream --tags --prune` prints nothing | already fetched; refs unchanged | verify with `git rev-parse upstream/master` vs the last merged hash |
+| Tests that `vi.mock("open-sse/services/oauthCredentialManager.js", …)` with a short factory fail with 502 after a merge | a fork patch added a new import from that upstream-owned module; the factory lacks the export | keep fork helpers in fork-only files (`open-sse/services/codebuddy/refreshExpiry.js`), never add exports to upstream-owned modules |
 | `du: command not found` during CLI build | old `build-cli.js` restored | keep the fork's portable `directorySize` walk |
 | Dashboard shows "update to vX" and installs upstream | `Sidebar.js`/`config.js` fork patch lost | re-apply §5.5 |
 

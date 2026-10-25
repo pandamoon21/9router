@@ -26,8 +26,8 @@ import {
 import {
   refreshProviderCredentials as _refreshProviderCredentials,
   shouldRefreshCredentials as _shouldRefreshCredentials,
-  isRefreshTokenExpired as _isRefreshTokenExpired,
 } from "open-sse/services/oauthCredentialManager.js";
+import { isRefreshTokenExpired as _isRefreshTokenExpired } from "open-sse/services/codebuddy/refreshExpiry.js";
 
 export const TOKEN_EXPIRY_BUFFER_MS = BUFFER_MS;
 

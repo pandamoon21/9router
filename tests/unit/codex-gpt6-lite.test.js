@@ -11,10 +11,6 @@ const credentials = { connectionId: "fixture", accessToken: "fixture-token" };
 afterEach(() => vi.restoreAllMocks());
 
 describe("Codex GPT-6 Sol/Luna transport", () => {
-  // Only gpt-6.1-sol grew to the 1M-context tier (upstream 9f41ee75/89ffac5a);
-  // gpt-6-sol and gpt-6-luna keep the 272k window.
-  const CONTEXT_WINDOW = { "gpt-6.1-sol": 1050000, "gpt-6-sol": 272000, "gpt-6-luna": 272000 };
-
   it.each(["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"])("lists %s with Codex capabilities", (model) => {
     const entry = getModelsByProviderId("codex").find((item) => item.id === model);
     expect(entry?.responsesLite).toBe(true);
@@ -24,7 +20,7 @@ describe("Codex GPT-6 Sol/Luna transport", () => {
       reasoning: true,
       search: true,
       thinkingFormat: "openai",
-      contextWindow: CONTEXT_WINDOW[model],
+      contextWindow: 272000,
       maxOutput: 128000,
     });
     expect(getThinkingLevels("codex", model)).toEqual(["low", "medium", "high", "xhigh", "max"]);

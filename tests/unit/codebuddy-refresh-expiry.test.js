@@ -2,7 +2,7 @@
 // from the access token's `expiresAt`. Past it, a refresh can only fail, so the
 // guard reports it instead of spending a round trip per request.
 import { describe, it, expect } from "vitest";
-import { isRefreshTokenExpired } from "../../open-sse/services/oauthCredentialManager.js";
+import { isRefreshTokenExpired } from "../../open-sse/services/codebuddy/refreshExpiry.js";
 
 describe("isRefreshTokenExpired", () => {
   it("is true once refreshExpiresAt has passed", () => {

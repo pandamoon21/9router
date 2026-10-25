@@ -105,6 +105,10 @@ describe("Kiro external_idp (CLIProxyAPI) import and refresh", () => {
     expect(headers.TokenType).toBe("EXTERNAL_IDP");
     expect(headers.tokentype).toBeUndefined();
 
+    // FORK_PATCH: external_idp binds to the CodeWhisperer surface itself (TokenType:
+    // EXTERNAL_IDP), so it keeps the registry order. Only api_key leads with q.*
+    // (open-sse/executors/kiro.js). Upstream b6a9ca43 asserts q.* first for every
+    // auth method; the fork deliberately does not.
     expect(executor.buildUrl("claude-sonnet-4.5", true, 0, credentials)).toBe(
       "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse"
     );
