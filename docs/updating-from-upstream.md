@@ -43,19 +43,19 @@
 
 - Working branch: **`master`** (tracks `origin/master`).
 - Version lives in **two** places and must stay in sync: root `package.json`
-  `"version"` and `cli/package.json` `"version"`. Today both read `0.5.109`.
+  `"version"` and `cli/package.json` `"version"`. Today both read `0.5.112`.
 - The fork's changes are recorded as *normal commits on `master`* plus merge
   commits from `upstream/master`. There is **no rebase workflow** — fork patches
   keep their original commit ids so old merges never need replaying.
-- Last upstream merged: **v0.5.109** (`f39d8f07`, 2026-10-23). The fork is
-  currently `62` commits ahead of and `0` behind `upstream/master`.
+- Last upstream merged: **v0.5.112** (`1fe586bb`, 2026-10-28). The fork is
+  currently `63` commits ahead of and `0` behind `upstream/master`.
 
 Verify all of the above at any time:
 
 ```bash
 git remote -v
 git rev-parse --abbrev-ref HEAD            # master
-git rev-list --left-right --count upstream/master...HEAD   # -> "0    62"
+git rev-list --left-right --count upstream/master...HEAD   # -> "0    63"
 grep '"version"' package.json cli/package.json
 ```
 
@@ -178,7 +178,7 @@ git push origin master
   the message). Use `git fetch` + `git merge` so you can inspect first.
 - Prefer a **single merge commit per upstream release**. The fork's history shows
   exactly this pattern (`v0.5.65`, `v0.5.69`, `v0.5.75`, `v0.5.81`, `v0.5.85`,
-  `v0.5.91`, `v0.5.95`, `v0.5.99`, `v0.5.104`, `v0.5.109`).
+  `v0.5.91`, `v0.5.95`, `v0.5.99`, `v0.5.104`, `v0.5.109`, `v0.5.112`).
 - Enable **rerere** once per clone so repeated conflict resolutions are reused:
 
   ```bash
@@ -398,6 +398,13 @@ cd tests && npx vitest run translator/golden-url-header.test.js      # verify st
 > `-u` on Windows, restore them to the committed `linux` / `v22.23.2` with `sed`
 > before committing, or the diff is machine-specific noise.
 
+> **v0.5.112 update:** the tracked snapshot embeds `9Router/<version>`, so it goes
+> stale on every upstream version bump (cline/clinepass/kimi/codebuddy fail until
+> `-u`). Same `sed` restore of `linux` / `v22.23.2` applies. Upstream also forgot
+> `tests/__baseline__/providers-baseline.json` for new providers (`runcrate`):
+> `verify-providers.mjs` reports "provider added" — add the entry from
+> `PROVIDERS.<id>` (JSON round-trip) rather than ignoring it.
+
 > Do **not** `rm` the `.snap` and re-run without `-u` — every case reports as
 > "148 failed" instead of writing fresh baselines. `-u` is what writes them.
 
@@ -489,6 +496,7 @@ bash ./install.sh --build-only
 | `git fetch upstream --tags --prune` prints nothing | already fetched; refs unchanged | verify with `git rev-parse upstream/master` vs the last merged hash |
 | Tests that `vi.mock("open-sse/services/oauthCredentialManager.js", …)` with a short factory fail with 502 after a merge | a fork patch added a new import from that upstream-owned module; the factory lacks the export | keep fork helpers in fork-only files (`open-sse/services/codebuddy/refreshExpiry.js`), never add exports to upstream-owned modules |
 | `du: command not found` during CLI build | old `build-cli.js` restored | keep the fork's portable `directorySize` walk |
+| `codebuddy-channel-headers.test.js` fails on "request id" relations after a merge | upstream's simpler `codebuddyHeaders` hook (`default.js`) asserts `X-Request-ID === X-Conversation-Request-ID` and a fresh conversation id per call; the fork executor's `applyCodeBuddyRequestHeaders` (real CLI shape) overrides it: `X-Request-ID` = message id, stable conversation id | keep the fork contract; the test is adapted (v0.5.112). Do not "fix" the executor to match upstream's hook |
 | Dashboard shows "update to vX" and installs upstream | `Sidebar.js`/`config.js` fork patch lost | re-apply §5.5 |
 
 ---
